@@ -1,12 +1,18 @@
 module Nmea0183 ( isNmeaChar 
                 , startChar  
                 , isStartChar 
+                , fieldSep
+                , isFieldSep  
+                , checksumSep
+                , isChecksumSep
                 , reservedChars 
                 , isReservedChar 
                 , validChars
                 , isValidChar
                 , transmittableChars
                 , isTransmittableChar
+                , undefChars
+                , isUndefChar
                 ) where
 
 import Data.Word
@@ -20,6 +26,11 @@ isNmeaChar c = (c .&. 0x80) == 0x00
 startChar = c2w '$'
 isStartChar = (==) startChar
 
+checksumSep = c2w '*'
+isChecksumSep = (==) checksumSep
+
+fieldSep = c2w ','
+isFieldSep = (==) fieldSep
 
 reservedChars :: [ Word8 ]
 reservedChars = map c2w "$*,!\\^~" ++ [ 0x0d, 0x0a ]
