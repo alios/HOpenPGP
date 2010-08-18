@@ -11,6 +11,14 @@ data GeodaticModelT where
   WGS84 :: GeodaticModelT
   deriving (Eq, Show)
 
+instance GeodaticModel GeodaticModelT where
+  semiMajorAxis ANS = (6378160.0 *~ meter)
+  semiMajorAxis GRS80 = (6378137.0 *~ meter)
+  semiMajorAxis WGS84 = (6378137.0 *~ meter)
+  recProcFlattening ANS = (298.25 *~ one)
+  recProcFlattening GRS80 = (298.257222101 *~ one)
+  recProcFlattening WGS84 = (298.257223563 *~ one)
+
 class (Eq m, Show m) => GeodaticModel m where
   semiMajorAxis :: (Fractional t) => m -> Length t
   recProcFlattening :: (Fractional t) => m -> Dimensionless t
@@ -29,13 +37,6 @@ class (Eq m, Show m) => GeodaticModel m where
         b = ((_1 - f) ** _2)
     in  a / b
        
-instance GeodaticModel GeodaticModelT where
-  semiMajorAxis ANS = (6378160.0 *~ meter)
-  semiMajorAxis GRS80 = (6378137.0 *~ meter)
-  semiMajorAxis WGS84 = (6378137.0 *~ meter)
-  recProcFlattening ANS = (298.25 *~ one)
-  recProcFlattening GRS80 = (298.257222101 *~ one)
-  recProcFlattening WGS84 = (298.257223563 *~ one)
 
 data Geodatic
 data ECEF
