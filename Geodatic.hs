@@ -1,6 +1,7 @@
-{-# LANGUAGE GADTs, EmptyDataDecls, FlexibleInstances, Rank2Types, FlexibleContexts, TypeSynonymInstances #-}
+{-# LANGUAGE GADTs, EmptyDataDecls, FlexibleInstances, Rank2Types, FlexibleContexts, TypeSynonymInstances, LiberalTypeSynonyms #-}
 
-module ObjectDB where
+module Geodatic ( ans, grs80, wgs84 
+                , toEcef, toGeodatic ) where
 
 import qualified Prelude
 import Numeric.Units.Dimensional.Prelude
@@ -37,35 +38,53 @@ class (Eq m, Show m) => GeodaticModel m where
         b = ((_1 - f) ** _2)
     in  a / b
        
-
 data Geodatic
 data ECEF
 
 data Coordinate t where
-  GeodaticCoordinate :: (RealFloat t) => GeodaticModelT -> 
-                        PlaneAngle t -> PlaneAngle t -> Length t -> Coordinate Geodatic
-  ECEFCoordinate :: (RealFloat t, Show t) => Length t -> Length t -> Length t -> Coordinate ECEF
+  GeodaticCoordinate :: (Eq t, Show t, Num t, RealFloat t) => GeodaticModelT -> 
+                        PlaneAngle t-> 
+                        PlaneAngle t -> 
+                        Length t -> 
+                        Coordinate Geodatic
+  ECEFCoordinate :: (Eq t, Show t, Num t, RealFloat t) =>Length t -> Length t -> Length t -> Coordinate ECEF
   
+{- instance Eq (Coordinate t) where
+  (ECEFCoordinate x y z) == (ECEFCoordinate x' y' z') = (x == x') &&
+                                                        (y == y') && 
+                                                        (z == z')
   
+  -}
+
 instance Show (Coordinate t) where
-  show (GeodaticCoordinate m phi lambda h) = show (m,phi,lambda,h)
+  show (GeodaticCoordinate m φ λ h) = show (m,φ,λ,h)
   show (ECEFCoordinate x y z) = show (x,y,z)
   
+ans φ λ h = 
+  GeodaticCoordinate ANS (φ *~ degree) (λ *~ degree) (h *~ meter)
+
+grs80 φ λ h = 
+  GeodaticCoordinate GRS80 (φ *~ degree) (λ *~ degree) (h *~ meter)
+
+wgs84 φ λ h = 
+  GeodaticCoordinate WGS84 (φ *~ degree) (λ *~ degree) (h *~ meter)
+
+
 toEcef :: Coordinate t -> Coordinate ECEF
 toEcef c@(ECEFCoordinate _ _ _) = c
-toEcef (GeodaticCoordinate m phi lambda h) =
+toEcef (GeodaticCoordinate m φ λ h) =
   let e2 = fstEccentricity m
-      x = sqrt (_1 - (e2 * ((sin phi) ** _2)))
+      x = sqrt (_1 - (e2 * ((sin φ) ** _2)))
       a = semiMajorAxis m
       normal = a / x
       normalh = normal + h
-      rx = normalh * (cos phi) * (cos lambda)
-      ry = normalh * (cos phi) * (sin lambda)
-      rz = (((a * ( _1 - e2)) / x) + h) * (sin phi)
+      rx = normalh * (cos φ) * (cos λ)
+      ry = normalh * (cos φ) * (sin λ)
+      rz = (((a * ( _1 - e2)) / x) + h) * (sin φ)
   in ECEFCoordinate rx ry rz
      
 toGeodatic :: Coordinate t -> GeodaticModelT -> Coordinate Geodatic
-toGeodatic c@(GeodaticCoordinate m phi lambda h) tm =
+toGeodatic c@(GeodaticCoordinate m φ λ h) tm =
   if (tm == m) then c else toGeodatic (toEcef c) tm
 toGeodatic c@(ECEFCoordinate x y z) m = 
   let a = semiMajorAxis m
@@ -91,14 +110,14 @@ toGeodatic c@(ECEFCoordinate x y z) m =
       v = sqrt (ua + ((_1 - e2) * ub))
       z0 = (b * b * z) / (a * v)
       h = u * (_1 - ((b * b)/(a * v)))
-      phi = atan ((z + (e'2 * z0)) / r)
-      lambda = atan2 y x
-  in GeodaticCoordinate m phi lambda h
+      φ = atan ((z + (e'2 * z0)) / r)
+      λ = atan2 y x
+  in GeodaticCoordinate m φ λ h
      
-ms = GeodaticCoordinate WGS84 (57.6 *~ degree) (7.42 *~ degree) (35 *~ meter)
+     
+ms = wgs84 57.6 7.42 35     
 mse = toEcef ms
 msa1 = toGeodatic ms ANS
 msa2 = toGeodatic mse ANS
 msb = toGeodatic mse WGS84
-
 
