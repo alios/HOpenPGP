@@ -5,9 +5,9 @@ INCLUDE=
 CC=gcc
 LD=gcc
 
-CFLAGS=-std=posix -gdwarf2 -pedantic -Wall -Wcast-align -Wcast-qual \
+CFLAGS=-ansi -g -pedantic -Wall -Wcast-align -Wcast-qual \
     -Wchar-subscripts -Winline -Wpointer-arith -Wredundant-decls -Wshadow \
-    -Wwrite-strings -ffunction-sections $(INCLUDE)
+    -Wwrite-strings -ffunction-sections -pthread $(INCLUDE)
 
 LDFLAGS=-Wl,-Map,$(PROJ).map,--gc-sections
 
@@ -24,6 +24,6 @@ $(PROJ): $(OBJS)
 %.o : %.c
 	$(CC) $(CFLAGS) $(GENDEPFLAGS) -o $@ -c $<
 
--include $(shell mkdir -p .deps 2>/dev/null) $(wildcard .dep/*)
+-include $(shell mkdir -p .deps 2>/dev/null) $(wildcard .deps/*)
 
 .PHONY : all clean
