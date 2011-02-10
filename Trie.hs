@@ -2,16 +2,21 @@
 
 module Trie where
 
+import Data.Maybe (isJust, fromJust, fromMaybe)
 import qualified Data.Map as M
+import Test.QuickCheck
 
-
-class Tries k v where
+class (Ord k) => Tries k v where
   data Trie k v
   tempty :: Trie k v
   tlookup :: Trie k v -> [k] -> Maybe v
   tbind :: [k] -> v -> Trie k v -> Trie k v
-  tshow :: (Show k, Show v) => Trie k v -> String
+  tfromList :: [([k], v)] -> Trie k v
+  tfromList = foldl (\t (k, v) -> tbind k v t) tempty
   
+instance (Show v, Show k) => Show (Trie k v) where
+  show (Trie m v) = show v ++ ": " ++ show m
+
 instance (Ord k) => Tries k v where
   data Trie k v = Trie (M.Map k (Trie k v)) (Maybe v)
   
@@ -25,18 +30,20 @@ instance (Ord k) => Tries k v where
   
   tbind [] v (Trie edges _) = Trie edges $ Just v
   tbind (k:ks) nv (Trie edges v) =
-    let t = case (M.lookup k edges) of
-          Nothing -> tempty
-          Just t' -> tbind ks nv t'
-        newedges = M.insert k t edges
+    let t = fromMaybe tempty $ M.lookup k edges
+        newedges = M.insert k (tbind ks nv t) edges
     in  (Trie newedges v) 
 
-  tshow (Trie edges v) =
-    let cs = M.toList edges
-        a = concat [ "(" ++ show k ++ ", " ++ tshow ts ++ ")"  | (k, ts) <- cs] 
-    in "(" ++ show v ++ ": [" ++ a ++ "])" 
-                 
-a = tbind "car" 30 $ tempty
-x = tbind "cocktail" 10 $ tbind "cart" 20 $ a
-
-y = tbind "" 23 $ tempty
+prop_bind :: (Ord k, Eq v) => [k] -> v -> Bool
+prop_bind k v =
+  let t = tbind k v tempty
+      v' = tlookup t k
+  in isJust v' && (fromJust v') == v
+     
+prop_fromList :: (Ord k, Eq v) => [([k], v)] -> Bool
+prop_fromList m = 
+  let map = M.fromList m
+      lst = M.toList map
+      trie = tfromList lst
+  in and [ (tlookup trie k) == (Just v) | (k,v) <- lst ]
+     
