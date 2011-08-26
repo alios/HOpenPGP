@@ -7,6 +7,7 @@ import Network.HTTP
 import Network.Browser
 import qualified Data.ByteString.Lazy as B
 import System.IO
+import Text.Printf
 
 baseuri s = 
   let q = urlEncodeVars [("tl", "de"), ("q", s)]
@@ -27,6 +28,8 @@ t2s s = map T.unpack $ T.split isPunct $ T.pack s
           
 main = do
   t <- getContents
-  ds <- fmap B.concat $ browse $ ba t
-  B.writeFile "/tmp/out.mp3" ds
+  ds <- browse $ ba t
+  let ds' =  zip [ printf "/tmp/%06d.mp3" i | i <- [(0 :: Int)..]] ds
+  sequence $ map (\(f,d) -> B.writeFile f d) ds'
+  
   
