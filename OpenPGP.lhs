@@ -8,7 +8,7 @@ import Data.Attoparsec.Enumerator
 import qualified Data.Attoparsec as A
 import Data.Convertible
 import qualified Data.ByteString.Base64 as Base64
-import Data.Time
+import Data.Time (UTCTime)
 import Data.Bits
 import Data.Word
 import Data.Tuple (swap)
@@ -202,6 +202,7 @@ parseSimpleS2K = do
   hashAlgo <- parseHashAlgo
   return $ SimpleS2K hashAlgo
 \end{code}
+
 
 3.7.1.2.  Salted S2K
 
@@ -543,14 +544,14 @@ bodyLenParser FiveOctedLength = fmap (fromInteger . convert) $ do
 
 
 \begin{code}
-{-
+
 bodyLenParser PartialBodyLength = fmap (fromInteger . convert) $ do
   a <- A.anyWord8
   let n = a .&. 0x1f
-      a' = undefined
+      a' :: Word32
+      a' = 1 `shiftL` (convert n)
   if (not (a >= 224 && a < 255)) then fail "partial bodylength must encode between 224 and 255"
     else return a'
--}
 \end{code}
 
 4.3.  Packet Tags
@@ -670,6 +671,26 @@ lookupPacketTag i = lookup i $ map swap packetTagCoding
      - A string of octets that is the encrypted session key.  This
        string takes up the remainder of the packet, and its contents are
        dependent on the public-key algorithm used.
+
+
+\begin{code}
+parsePEKSKPBody :: Parser (Maybe KeyID, PublicKeyAlgorithm, Either MPI (MPI, MPI))
+parsePEKSKPBody = do
+  _ <- A.word8 3
+  keyid' <- parseKeyID
+  let keyid = if (keyid' == 0) then Nothing else Just keyid'
+  algo <- parsePublicKeyAlgorithm
+  encKey <- case (algo) of
+    RSAEncryptOrSign -> parseRSAEncryptedSessionKey
+    RSAEncryptOnly -> parseRSAEncryptedSessionKey
+    ElgamalEncryptOnly -> parseElgamalEncryptedSessionKey
+  return (keyid, algo, encKey)
+    where parseRSAEncryptedSessionKey = fmap Left parseMPI
+          parseElgamalEncryptedSessionKey = do
+            a <- parseMPI
+            b <- parseMPI
+            return $ Right (a, b)
+\end{code}
 
    Algorithm Specific Fields for RSA encryption
 
@@ -830,8 +851,57 @@ lookupPacketTag i = lookup i $ map swap packetTagCoding
        party that only sees the signature, not the key or source
        document) that cannot include a target subpacket.
 
-5.2.2. Version 3 Signature Packet Format
+\begin{code}
+data SignatureType = 
+  SignatureBinaryDoc |
+  SignatureCanonicalTextDoc |
+  StandaloneSignature |
+  GenericCertificationOfAUserIDAndPublicKeyPacket |
+  PersonaCertificationOfAUserIDAndPublicKeyPacket |
+  CasualCertificationOfAUserIDAndPublicKeyPacket |
+  PositiveCertificationOfAUserIDAndPublicKeyPacket |
+  SubkeyBindingSignature |
+  PrimaryKeyBindingSignature |
+  SignatureDirectlyOnAKey |
+  KeyRevocationSignature |
+  SubkeyRevocationSignature |
+  CertificationRevocationSignature |
+  TimestampSignature |
+  ThirdPartyConfirmationSignature
+  deriving (Show, Read, Eq, Enum)
+           
+signatureTypeCoding = [
+  (SignatureBinaryDoc , 0x00),
+  (SignatureCanonicalTextDoc , 0x01),
+  (StandaloneSignature , 0x02),
+  (GenericCertificationOfAUserIDAndPublicKeyPacket , 0x10),
+  (PersonaCertificationOfAUserIDAndPublicKeyPacket , 0x11),
+  (CasualCertificationOfAUserIDAndPublicKeyPacket , 0x12),
+  (PositiveCertificationOfAUserIDAndPublicKeyPacket , 0x13),
+  (SubkeyBindingSignature , 0x18),
+  (PrimaryKeyBindingSignature , 0x19),
+  (SignatureDirectlyOnAKey , 0x1F),
+  (KeyRevocationSignature , 0x20),
+  (SubkeyRevocationSignature , 0x28),
+  (CertificationRevocationSignature , 0x30),
+  (TimestampSignature , 0x40),
+  (ThirdPartyConfirmationSignature , 0x50)
+  ]
 
+lookupSignatureType :: Word8 -> Maybe SignatureType
+lookupSignatureType i = lookup i $ map swap signatureTypeCoding
+signatureTypeToNum :: SignatureType -> Maybe Word8
+signatureTypeToNum p = lookup p signatureTypeCoding
+
+parseSignatureType :: Parser SignatureType
+parseSignatureType = do
+  w <- A.anyWord8
+  case (lookupSignatureType w) of
+    Nothing -> fail "unknown signature type"
+    Just a -> return a    
+\end{code}
+
+5.2.2. Version 3 Signature Packet Format
 
    The body of a version 3 Signature Packet contains:
 
@@ -860,6 +930,42 @@ lookupPacketTag i = lookup i $ map swap packetTagCoding
    The high 16 bits (first two octets) of the hash are included in the
    Signature packet to provide a quick test to reject some invalid
    signatures.
+
+
+\begin{code}
+parseSignaturePacket3 = do
+  _ <- A.word8 3
+  l <- bodyLenParser OneOctedLength  
+  if (l /= 5) then fail $ "v3 signature packet must have a length of 5 but has " ++ show l
+    else do
+    stype <- parseSignatureType
+    t <- parseTime
+    keyid <- parseKeyID
+    pkAlgo <- parsePublicKeyAlgorithm
+    hasha <- parseHashAlgorithm
+    shv <- anyWord16
+    hashdata <- case (pkAlgo) of
+      RSAEncryptOrSign -> parseRSAMPI
+      RSASignOnly -> parseRSAMPI
+      DSA -> parseDSAMPI
+    let (MPI firstHash) = case (hashdata) of 
+          Left h -> h
+          Right (h, _) -> h
+    if (not $ (convert firstHash) `checkFirstHash` shv) 
+      then fail "signedHashValue check failed"
+      else return (stype, t , keyid, pkAlgo, hasha, hashdata)
+      where parseRSAMPI = fmap Left parseMPI
+            parseDSAMPI = do
+              r <- parseMPI
+              s <- parseMPI
+              return $ Right (r,s)
+            checkFirstHash bs v =
+              let a = convert (bs `B.index` 0)
+                  b = convert (bs `B.index` 1)
+                  v' :: Word16
+                  v' = (a `shiftL` 8) .|. b
+              in v' == v
+\end{code}
 
    Algorithm-Specific Fields for RSA signatures:
 
@@ -895,6 +1001,7 @@ lookupPacketTag i = lookup i $ map swap packetTagCoding
      - SHA384:     0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02
 
      - SHA512:     0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03
+
 
    The ASN.1 Object Identifiers (OIDs) are as follows:
 
@@ -2921,6 +3028,46 @@ parsePublicKeyAlgorithm = do
 
    Implementations MUST implement SHA-1.  Implementations MAY implement
    other algorithms.  MD5 is deprecated.
+
+\begin{code}
+data HashAlgorithm = 
+  MD5 | 
+  SHA1 |
+  RIPEMD160 |
+  SHA256 |
+  SHA384 |
+  SHA512 |
+  SHA224 |
+  PrivateHashAlgo Word8
+  deriving (Show, Read, Eq)
+           
+hashAlgorithmCoding = [
+  (MD5, 1),
+  (SHA1, 2),
+  (RIPEMD160, 3),
+  (SHA256, 8),
+  (SHA384, 9),
+  (SHA512, 10),
+  (SHA224, 11)
+  ]
+
+lookupHashAlgorithm :: Word8 -> Maybe HashAlgorithm
+lookupHashAlgorithm h = 
+  if ((h >= 100) && (h <= 100)) 
+  then Just $ PrivateHashAlgo h
+  else lookup h $ map swap hashAlgorithmCoding
+       
+hashAlgorithmToNum :: HashAlgorithm -> Maybe Word8
+hashAlgorithmToNum (PrivateHashAlgo h) = Just h
+hashAlgorithmToNum h = lookup h hashAlgorithmCoding
+
+parseHashAlgorithm :: Parser HashAlgorithm
+parseHashAlgorithm = do
+  w <- A.anyWord8
+  case (lookupHashAlgorithm w) of
+    Just a -> return a    
+    Nothing -> fail $ "unknown hash algorithm " ++ show w
+\end{code}
 
 10. IANA Considerations
 
