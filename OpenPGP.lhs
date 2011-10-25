@@ -659,7 +659,12 @@ data Packet =
     sig3Data :: Either MPI (MPI, MPI)
     }
       
-    
+parsePacket = do    
+  tag <- fmap packetHeaderTag parsePacketHeader
+  case tag of
+    PublicKeyEncryptedSessionKeyPacket -> parsePEKSKPBody
+    SignaturePacket -> parseSignaturePBody3
+   
 \end{code}
 
 5.1.  Public-Key Encrypted Session Key Packets (Tag 1)
@@ -955,8 +960,8 @@ parseSignatureType = do
 
 
 \begin{code}
-parseSignaturePacket3 :: Parser Packet
-parseSignaturePacket3 = do
+parseSignaturePBody3 :: Parser Packet
+parseSignaturePBody3 = do
   _ <- A.word8 3
   l <- bodyLenParser OneOctedLength  
   if (l /= 5) then fail $ "v3 signature packet must have a length of 5 but has " ++ show l
