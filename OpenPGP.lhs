@@ -1,5 +1,7 @@
 \begin{code}
 
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
 import Data.Enumerator (Iteratee)
@@ -641,6 +643,25 @@ lookupPacketTag i = lookup i $ map swap packetTagCoding
 
 5.  Packet Types
 
+\begin{code}
+data Packet = 
+  MkPEKSKP {
+    pekskpKeyID :: Maybe KeyID,
+    pekskpPublicKeyAlgorithm :: PublicKeyAlgorithm,
+    pekskpData :: Either MPI (MPI, MPI)
+    } |
+  MkSignaturePacket3 {
+    sig3Type :: SignatureType,
+    sig3Time :: UTCTime,
+    sig3KeyID :: KeyID,
+    sig3PKAlgorithm :: PublicKeyAlgorithm,
+    sig3HashAlgorithm :: HashAlgorithm,
+    sig3Data :: Either MPI (MPI, MPI)
+    }
+      
+    
+\end{code}
+
 5.1.  Public-Key Encrypted Session Key Packets (Tag 1)
 
    A Public-Key Encrypted Session Key packet holds the session key used
@@ -674,7 +695,8 @@ lookupPacketTag i = lookup i $ map swap packetTagCoding
 
 
 \begin{code}
-parsePEKSKPBody :: Parser (Maybe KeyID, PublicKeyAlgorithm, Either MPI (MPI, MPI))
+
+parsePEKSKPBody :: Parser Packet
 parsePEKSKPBody = do
   _ <- A.word8 3
   keyid' <- parseKeyID
@@ -684,7 +706,7 @@ parsePEKSKPBody = do
     RSAEncryptOrSign -> parseRSAEncryptedSessionKey
     RSAEncryptOnly -> parseRSAEncryptedSessionKey
     ElgamalEncryptOnly -> parseElgamalEncryptedSessionKey
-  return (keyid, algo, encKey)
+  return $ MkPEKSKP keyid algo encKey
     where parseRSAEncryptedSessionKey = fmap Left parseMPI
           parseElgamalEncryptedSessionKey = do
             a <- parseMPI
@@ -933,6 +955,7 @@ parseSignatureType = do
 
 
 \begin{code}
+parseSignaturePacket3 :: Parser Packet
 parseSignaturePacket3 = do
   _ <- A.word8 3
   l <- bodyLenParser OneOctedLength  
@@ -953,7 +976,7 @@ parseSignaturePacket3 = do
           Right (h, _) -> h
     if (not $ (convert firstHash) `checkFirstHash` shv) 
       then fail "signedHashValue check failed"
-      else return (stype, t , keyid, pkAlgo, hasha, hashdata)
+      else return $ MkSignaturePacket3 stype t keyid pkAlgo hasha hashdata
       where parseRSAMPI = fmap Left parseMPI
             parseDSAMPI = do
               r <- parseMPI
