@@ -4,6 +4,11 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
+module OpenPGP ( Packet (..)
+               , PEKSKP (..)
+               , Signature3 (..)
+               ) where
+
 import Data.Enumerator (Iteratee)
 import Data.Attoparsec (Parser, (<?>))
 import Data.Attoparsec.Enumerator
@@ -162,7 +167,6 @@ data StringToKeySpecifier =
 
 parseStringToKeySpecifier :: Parser StringToKeySpecifier
 parseStringToKeySpecifier = A.choice [parseSimpleS2K, parseSaltedS2K, parseIteratedAndSaltedS2K]
-
 parseHashAlgo = A.anyWord8 <?> "hash algorithm" -- TODO: Parse hash Algo correctly
 
 \end{code}
@@ -198,11 +202,13 @@ parseHashAlgo = A.anyWord8 <?> "hash algorithm" -- TODO: Parse hash Algo correct
    on the right discarded.
 
 \begin{code}
+
 parseSimpleS2K :: Parser StringToKeySpecifier
 parseSimpleS2K = do
   _ <- A.word8 0x00
   hashAlgo <- parseHashAlgo
   return $ SimpleS2K hashAlgo
+
 \end{code}
 
 
@@ -221,13 +227,16 @@ parseSimpleS2K = do
    specifier, followed by the passphrase.
 
 \begin{code}
+
 parseSaltedS2K :: Parser StringToKeySpecifier
 parseSaltedS2K = do
   _ <- A.word8 0x01
   hashAlgo <- parseHashAlgo
   saltValue <- anyWord64
   return $ SaltedS2K hashAlgo saltValue
+
 \end{code}
+
 
 3.7.1.3.  Iterated and Salted S2K
 
@@ -242,6 +251,7 @@ parseSaltedS2K = do
        Octet  10:       count, a one-octet, coded value
 
 \begin{code}
+
 parseIteratedAndSaltedS2K :: Parser StringToKeySpecifier
 parseIteratedAndSaltedS2K = do
   _ <- A.word8 0x01
@@ -249,6 +259,7 @@ parseIteratedAndSaltedS2K = do
   saltValue <- anyWord64
   cnt <- A.anyWord8
   return $ IteratedAndSaltedS2K hashAlgo saltValue cnt
+
 \end{code}
 
    The count is coded into a one-octet number using the following
@@ -399,6 +410,7 @@ parseIteratedAndSaltedS2K = do
        better to use a definite length, or a new format header.  The new
        format headers described below have a mechanism for precisely
        encoding data of indeterminate length.
+
 \begin{code}
   
 data PacketLength =
@@ -419,9 +431,10 @@ lookupPacketLength :: Word8 -> Maybe PacketLength
 lookupPacketLength i = lookup i $ map swap packetLengthCoding
 packetLengthToNum :: PacketLength -> Maybe Word8
 packetLengthToNum p = lookup p packetLengthCoding
-
                       
 \end{code}
+
+
 4.2.2.1.  One-Octet Lengths
 
    A one-octet Body Length header encodes a length of 0 to 191 octets.
@@ -429,10 +442,14 @@ packetLengthToNum p = lookup p packetLengthCoding
    is less than 192.  The body length is equal to:
 
        bodyLen = 1st_octet;
+
 \begin{code}
+
 bodyLenParser :: Num b => PacketLength -> Parser b
 bodyLenParser OneOctedLength = fmap (fromInteger . convert) A.anyWord8
+
 \end{code}
+
 
 4.2.2.2.  Two-Octet Lengths
 
@@ -443,13 +460,16 @@ bodyLenParser OneOctedLength = fmap (fromInteger . convert) A.anyWord8
        bodyLen = ((1st_octet - 192) << 8) + (2nd_octet) + 192
 
 \begin{code}
+
 bodyLenParser TwoOctedLength = fmap (fromInteger . convert) $ do
   o1' <- fmap ((-) 192) A.anyWord8
   let o1 :: Word16
       o1 = convert o1'
   o2 <- fmap ((-) 192) A.anyWord8
   return ((o1 `shiftL` 8) + (convert o2) + 192)
+
 \end{code}
+
 
 4.2.2.3.  Five-Octet Lengths
 
@@ -464,6 +484,7 @@ bodyLenParser TwoOctedLength = fmap (fromInteger . convert) $ do
    internally to some packets.
 
 \begin{code}
+
 bodyLenParser FiveOctedLength = fmap (fromInteger . convert) $ do
   _ <- A.word8 255
   o2' <- A.anyWord8
@@ -476,6 +497,7 @@ bodyLenParser FiveOctedLength = fmap (fromInteger . convert) $ do
       o4 = (convert o4') `shiftL` 8
       o5 = convert o5'
   return $ o2 .|. o3 .|. o4 .|. o5
+
 \end{code}
 
 
@@ -515,7 +537,9 @@ bodyLenParser PartialBodyLength = fmap (fromInteger . convert) $ do
       a' = 1 `shiftL` (convert n)
   if (not (a >= 224 && a < 255)) then fail "partial bodylength must encode between 224 and 255"
     else return a'
+
 \end{code}
+
 
 4.3.  Packet Tags
 
@@ -544,6 +568,7 @@ bodyLenParser PartialBodyLength = fmap (fromInteger . convert) $ do
        19       -- Modification Detection Code Packet
        60 to 63 -- Private or Experimental Values
 
+
 5.  Packet Types
 
 \begin{code}
@@ -556,65 +581,28 @@ class Packet t where
   bodyParser :: t -> Parser (PacketState t)
   isOldPacketTag :: PacketTag t -> Bool
   isOldPacketTag = ((<) 16) . packetTagNum
+  parsePacket ::  t -> Parser (PacketState t, Maybe PacketLength)
+  parsePacket t =
+    let n = (packetTagNum . packetTag) t 
+        isOld = (isOldPacketTag . packetTag) t
+    in do 
+      w <- A.anyWord8
+      let maskedPacket = w .&. 0x3f
+      if (w `testBit` 7)
+        then fail $ "no valid packet header"
+        else if (maskedPacket == n) then fail $ "read invalid header tag " ++ show maskedPacket
+               else if (isOld) 
+                      then do
+                        body <- bodyParser t
+                        case (lookupPacketLength $ maskedPacket .&. 0x03) of
+                          Nothing -> fail ""
+                          Just len -> return (body, Just len)
+                      else do
+                        body <- bodyParser t
+                        return (body, Nothing)
 
-parsePacket' :: Packet t => [t] -> Parser (PacketState t, Maybe PacketLength)
-parsePacket' ts =
-  let validPacketTags = [( (packetTagNum . packetTag) t, (t, (isOldPacketTag . packetTag) t)) | t <- ts]
-  in do 
-    w <- A.anyWord8
-    let maskedPacket = w .&. 0x3f
-    if (w `testBit` 7)
-      then fail $ "no valid packet header"
-      else case (lookup maskedPacket validPacketTags) of
-      Nothing -> fail $ "unknown old packet header tag " ++ show maskedPacket
-      Just (t, False) -> do
-        body <- bodyParser t
-        return (body, Nothing)
-      Just (t, True) -> do
-        body <- bodyParser t
-        case (lookupPacketLength $ maskedPacket .&. 0x03) of
-          Nothing -> fail ""
-          Just len -> return (body, Just len)
-        
 \end{code}
 
-data PacketHeaderT = 
-  OldPacketHeader PacketTag PacketLength |
-  NewPacketHeader PacketTag
-  
-class PacketHeader h where
-  packetHeaderTag  :: h -> PacketTag
-
-instance PacketHeader PacketHeaderT where  
-  packetHeaderTag (OldPacketHeader t _) = t
-  packetHeaderTag (NewPacketHeader t) = t
-  
-
-parsePacketHeader :: Parser PacketHeaderT
-parsePacketHeader = do
-  w <- A.try A.anyWord8
-  let valid = w `testBit` 7
-  if (not valid) then fail "is not a valid packet header"
-    else do 
-    let newPacket = w `testBit` 6 
-    let maskedPacket = w .&. 0x3f
-    if (newPacket) then do
-      case (lookupPacketTag maskedPacket) of
-        Nothing -> fail "unknown new packet header tag"
-        Just t  -> return $ NewPacketHeader t
-    else do
-      let tag = lookupPacketTag $ maskedPacket `shiftR` 2
-      let len = maskedPacket .&. 0x03
-      case (lookupPacketLength len) of
-          Nothing -> fail "unknown old packet header length field"
-          Just l  -> case (tag) of 
-            Nothing -> fail "unknown old packet header tag"
-            Just t  -> if (not $ isValidOldTag t) then fail "unknown old packet header tag"
-                         else return $ OldPacketHeader t l 
-
-headerIteratee :: Monad m => Iteratee ByteString m PacketHeaderT
-headerIteratee = iterParser parsePacketHeader
-    
 
 5.1.  Public-Key Encrypted Session Key Packets (Tag 1)
 
@@ -648,7 +636,8 @@ headerIteratee = iterParser parsePacketHeader
        dependent on the public-key algorithm used.
 
 
-\begin{code}     
+
+\begin{code}
 
 data PEKSKP = PEKSKP
 
