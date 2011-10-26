@@ -380,45 +380,6 @@ parseIteratedAndSaltedS2K = do
          Bits 5-0 -- packet tag
 
 
-\begin{code}
-data PacketHeaderT = 
-  OldPacketHeader PacketTag PacketLength |
-  NewPacketHeader PacketTag
-  
-class PacketHeader h where
-  packetHeaderTag  :: h -> PacketTag
-
-instance PacketHeader PacketHeaderT where  
-  packetHeaderTag (OldPacketHeader t _) = t
-  packetHeaderTag (NewPacketHeader t) = t
-  
-parsePacketHeader :: Parser PacketHeaderT
-parsePacketHeader = do
-  w <- A.try A.anyWord8
-  let valid = w `testBit` 7
-  if (not valid) then fail "is not a valid packet header"
-    else do 
-    let newPacket = w `testBit` 6 
-    let maskedPacket = w .&. 0x3f
-    if (newPacket) then do
-      case (lookupPacketTag maskedPacket) of
-        Nothing -> fail "unknown new packet header tag"
-        Just t  -> return $ NewPacketHeader t
-    else do
-      let tag = lookupPacketTag $ maskedPacket `shiftR` 2
-      let len = maskedPacket .&. 0x03
-      case (lookupPacketLength len) of
-          Nothing -> fail "unknown old packet header length field"
-          Just l  -> case (tag) of 
-            Nothing -> fail "unknown old packet header tag"
-            Just t  -> if (not $ isValidOldTag t) then fail "unknown old packet header tag"
-                         else return $ OldPacketHeader t l 
-
-headerIteratee :: Monad m => Iteratee ByteString m PacketHeaderT
-headerIteratee = iterParser parsePacketHeader
-
-\end{code}
-
  4.2.1.  Old Format Packet Lengths
 
    The meaning of the length-type in old format packets is:
@@ -583,89 +544,77 @@ bodyLenParser PartialBodyLength = fmap (fromInteger . convert) $ do
        19       -- Modification Detection Code Packet
        60 to 63 -- Private or Experimental Values
 
-\begin{code}
-data PacketTag = 
-  PublicKeyEncryptedSessionKeyPacket |
-  SignaturePacket |
-  SymmetricKeyEncryptedSessionKeyPacket |
-  OnePassSignaturePacket |
-  SecretKeyPacket |
-  PublicKeyPacket |
-  SecretSubkeyPacket |
-  CompressedDataPacket |
-  SymmetricallyEncryptedPacket |
-  MarkerPacket |
-  LiteralDataPacket |
-  TrustPacket |
-  UserIDPacket |
-  PublicSubkeyPacket |
-  UserAttributePacket |
-  SymEncryptedAndIntegrityProtectedDataPacket |
-  ModificationDetectionCodePacket 
-  deriving (Show, Read, Eq)  
-           
-packetTagCoding = [
-  (PublicKeyEncryptedSessionKeyPacket, 1),
-  (SignaturePacket, 2),
-  (SymmetricKeyEncryptedSessionKeyPacket, 3),
-  (OnePassSignaturePacket, 4),
-  (SecretKeyPacket, 5),
-  (PublicKeyPacket, 6),
-  (SecretSubkeyPacket, 7),
-  (CompressedDataPacket, 8),
-  (SymmetricallyEncryptedPacket, 9),
-  (MarkerPacket, 10),
-  (LiteralDataPacket, 11),
-  (TrustPacket, 12),
-  (UserIDPacket, 13),
-  (PublicSubkeyPacket, 14),
-  (UserAttributePacket, 17),
-  (SymEncryptedAndIntegrityProtectedDataPacket, 18),
-  (ModificationDetectionCodePacket, 19)
-  ]
-
-isValidOldTag :: PacketTag -> Bool
-isValidOldTag t = case (packetTagToNum t) of
-  Nothing -> False
-  Just t' -> t' < 16
-  
-isValidOldTagNum :: Word8 -> Bool
-isValidOldTagNum i = case (lookupPacketTag i) of
-  Nothing -> False
-  Just _ -> (i > 0) && (i < 16)
-  
-packetTagToNum :: PacketTag -> Maybe Word8
-packetTagToNum t = lookup t packetTagCoding
-lookupPacketTag :: Word8 -> Maybe PacketTag
-lookupPacketTag i = lookup i $ map swap packetTagCoding
-
-\end{code}
-
 5.  Packet Types
 
 \begin{code}
-data Packet = 
-  MkPEKSKP {
-    pekskpKeyID :: Maybe KeyID,
-    pekskpPublicKeyAlgorithm :: PublicKeyAlgorithm,
-    pekskpData :: Either MPI (MPI, MPI)
-    } |
-  MkSignaturePacket3 {
-    sig3Type :: SignatureType,
-    sig3Time :: UTCTime,
-    sig3KeyID :: KeyID,
-    sig3PKAlgorithm :: PublicKeyAlgorithm,
-    sig3HashAlgorithm :: HashAlgorithm,
-    sig3Data :: Either MPI (MPI, MPI)
-    }
-      
-parsePacket = do    
-  tag <- fmap packetHeaderTag parsePacketHeader
-  case tag of
-    PublicKeyEncryptedSessionKeyPacket -> parsePEKSKPBody
-    SignaturePacket -> parseSignaturePBody3
-   
+
+class Packet t where
+  data PacketState t :: *
+  data PacketTag t :: *
+  packetTag :: t -> PacketTag t
+  packetTagNum :: PacketTag t -> Word8
+  bodyParser :: t -> Parser (PacketState t)
+  isOldPacketTag :: PacketTag t -> Bool
+  isOldPacketTag = ((<) 16) . packetTagNum
+
+parsePacket' :: Packet t => [t] -> Parser (PacketState t, Maybe PacketLength)
+parsePacket' ts =
+  let validPacketTags = [( (packetTagNum . packetTag) t, (t, (isOldPacketTag . packetTag) t)) | t <- ts]
+  in do 
+    w <- A.anyWord8
+    let maskedPacket = w .&. 0x3f
+    if (w `testBit` 7)
+      then fail $ "no valid packet header"
+      else case (lookup maskedPacket validPacketTags) of
+      Nothing -> fail $ "unknown old packet header tag " ++ show maskedPacket
+      Just (t, False) -> do
+        body <- bodyParser t
+        return (body, Nothing)
+      Just (t, True) -> do
+        body <- bodyParser t
+        case (lookupPacketLength $ maskedPacket .&. 0x03) of
+          Nothing -> fail ""
+          Just len -> return (body, Just len)
+        
 \end{code}
+
+data PacketHeaderT = 
+  OldPacketHeader PacketTag PacketLength |
+  NewPacketHeader PacketTag
+  
+class PacketHeader h where
+  packetHeaderTag  :: h -> PacketTag
+
+instance PacketHeader PacketHeaderT where  
+  packetHeaderTag (OldPacketHeader t _) = t
+  packetHeaderTag (NewPacketHeader t) = t
+  
+
+parsePacketHeader :: Parser PacketHeaderT
+parsePacketHeader = do
+  w <- A.try A.anyWord8
+  let valid = w `testBit` 7
+  if (not valid) then fail "is not a valid packet header"
+    else do 
+    let newPacket = w `testBit` 6 
+    let maskedPacket = w .&. 0x3f
+    if (newPacket) then do
+      case (lookupPacketTag maskedPacket) of
+        Nothing -> fail "unknown new packet header tag"
+        Just t  -> return $ NewPacketHeader t
+    else do
+      let tag = lookupPacketTag $ maskedPacket `shiftR` 2
+      let len = maskedPacket .&. 0x03
+      case (lookupPacketLength len) of
+          Nothing -> fail "unknown old packet header length field"
+          Just l  -> case (tag) of 
+            Nothing -> fail "unknown old packet header tag"
+            Just t  -> if (not $ isValidOldTag t) then fail "unknown old packet header tag"
+                         else return $ OldPacketHeader t l 
+
+headerIteratee :: Monad m => Iteratee ByteString m PacketHeaderT
+headerIteratee = iterParser parsePacketHeader
+    
 
 5.1.  Public-Key Encrypted Session Key Packets (Tag 1)
 
@@ -699,24 +648,34 @@ parsePacket = do
        dependent on the public-key algorithm used.
 
 
-\begin{code}
+\begin{code}     
 
-parsePEKSKPBody :: Parser Packet
-parsePEKSKPBody = do
-  _ <- A.word8 3
-  keyid' <- parseKeyID
-  let keyid = if (keyid' == 0) then Nothing else Just keyid'
-  algo <- parsePublicKeyAlgorithm
-  encKey <- case (algo) of
-    RSAEncryptOrSign -> parseRSAEncryptedSessionKey
-    RSAEncryptOnly -> parseRSAEncryptedSessionKey
-    ElgamalEncryptOnly -> parseElgamalEncryptedSessionKey
-  return $ MkPEKSKP keyid algo encKey
-    where parseRSAEncryptedSessionKey = fmap Left parseMPI
-          parseElgamalEncryptedSessionKey = do
-            a <- parseMPI
-            b <- parseMPI
-            return $ Right (a, b)
+data PEKSKP = PEKSKP
+
+instance Packet PEKSKP where
+  data PacketTag PEKSKP = PEKSKPPacketTag
+  data PacketState PEKSKP = MkPEKSKP {
+    pekskpKeyID :: Maybe KeyID,
+    pekskpPublicKeyAlgorithm :: PublicKeyAlgorithm,
+    pekskpData :: Either MPI (MPI, MPI)
+    } 
+  packetTag _ = PEKSKPPacketTag
+  packetTagNum _ = 0x01
+  bodyParser PEKSKP = do
+    _ <- A.word8 3
+    keyid' <- parseKeyID
+    let keyid = if (keyid' == 0) then Nothing else Just keyid'
+    algo <- parsePublicKeyAlgorithm
+    encKey <- case (algo) of
+      RSAEncryptOrSign -> parseRSAEncryptedSessionKey
+      RSAEncryptOnly -> parseRSAEncryptedSessionKey
+      ElgamalEncryptOnly -> parseElgamalEncryptedSessionKey
+    return $ MkPEKSKP keyid algo encKey
+      where parseRSAEncryptedSessionKey = fmap Left parseMPI
+            parseElgamalEncryptedSessionKey = do
+              a <- parseMPI
+              b <- parseMPI
+              return $ Right (a, b)
 \end{code}
 
    Algorithm Specific Fields for RSA encryption
@@ -960,8 +919,21 @@ parseSignatureType = do
 
 
 \begin{code}
-parseSignaturePBody3 :: Parser Packet
-parseSignaturePBody3 = do
+
+data Signature3 = Signature3
+instance Packet Signature3 where 
+  data PacketTag Signature3 = Signature3PacketTag
+  data PacketState Signature3 = MkSignaturePacket3 {
+    sig3Type :: SignatureType,
+    sig3Time :: UTCTime,
+    sig3KeyID :: KeyID,
+    sig3PKAlgorithm :: PublicKeyAlgorithm,
+    sig3HashAlgorithm :: HashAlgorithm,
+    sig3Data :: Either MPI (MPI, MPI)
+    }
+  packetTag Signature3 = Signature3PacketTag
+  packetTagNum Signature3PacketTag = 0x02
+  bodyParser Signature3 = do
   _ <- A.word8 3
   l <- bodyLenParser OneOctedLength  
   if (l /= 5) then fail $ "v3 signature packet must have a length of 5 but has " ++ show l
@@ -993,6 +965,7 @@ parseSignaturePBody3 = do
                   v' :: Word16
                   v' = (a `shiftL` 8) .|. b
               in v' == v
+
 \end{code}
 
    Algorithm-Specific Fields for RSA signatures:
