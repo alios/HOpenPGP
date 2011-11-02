@@ -206,13 +206,29 @@ instance Binary UTCTime where
 
 \begin{code}
 data StringToKeySpecifier = 
-  SimpleS2K Word8|
-  SaltedS2K Word8 Word64 |
-  IteratedAndSaltedS2K Word8 Word64 Word8
+  SimpleS2K HashAlgorithm |
+  SaltedS2K HashAlgorithm Word64 |
+  IteratedAndSaltedS2K HashAlgorithm Word64 Word8
+  deriving (Eq, Show)
 
 parseStringToKeySpecifier :: Parser StringToKeySpecifier
 parseStringToKeySpecifier = A.choice [parseSimpleS2K, parseSaltedS2K, parseIteratedAndSaltedS2K]
-parseHashAlgo = A.anyWord8 <?> "hash algorithm" -- TODO: Parse hash Algo correctly
+
+instance Binary StringToKeySpecifier where
+  get = parserToGet parseStringToKeySpecifier
+  put (SimpleS2K a) = do
+    putWord8 0x00
+    put a
+  put (SaltedS2K a s) = do
+    putWord8 0x01
+    put a
+    put s
+  put (IteratedAndSaltedS2K a s i) = do
+    putWord8 0x02
+    put a
+    put s
+    putWord8 i
+  
 
 \end{code}
 
@@ -251,7 +267,7 @@ parseHashAlgo = A.anyWord8 <?> "hash algorithm" -- TODO: Parse hash Algo correct
 parseSimpleS2K :: Parser StringToKeySpecifier
 parseSimpleS2K = do
   _ <- A.word8 0x00
-  hashAlgo <- parseHashAlgo
+  hashAlgo <- parseHashAlgorithm
   return $ SimpleS2K hashAlgo
 
 \end{code}
@@ -276,7 +292,7 @@ parseSimpleS2K = do
 parseSaltedS2K :: Parser StringToKeySpecifier
 parseSaltedS2K = do
   _ <- A.word8 0x01
-  hashAlgo <- parseHashAlgo
+  hashAlgo <- parseHashAlgorithm
   saltValue <- anyWord64
   return $ SaltedS2K hashAlgo saltValue
 
@@ -299,8 +315,8 @@ parseSaltedS2K = do
 
 parseIteratedAndSaltedS2K :: Parser StringToKeySpecifier
 parseIteratedAndSaltedS2K = do
-  _ <- A.word8 0x01
-  hashAlgo <- parseHashAlgo
+  _ <- A.word8 0x02
+  hashAlgo <- parseHashAlgorithm
   saltValue <- anyWord64
   cnt <- A.anyWord8
   return $ IteratedAndSaltedS2K hashAlgo saltValue cnt
@@ -3196,6 +3212,13 @@ parseHashAlgorithm = do
   case (lookupHashAlgorithm w) of
     Just a -> return a    
     Nothing -> fail $ "unknown hash algorithm " ++ show w
+    
+instance Binary HashAlgorithm where
+  get = parserToGet parseHashAlgorithm
+  put a = case (hashAlgorithmToNum a) of
+    Nothing -> fail "unable to put unknown hash algorithm"
+    Just a' -> putWord8 a'
+      
 \end{code}
 
 10. IANA Considerations
