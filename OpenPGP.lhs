@@ -3,11 +3,18 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 
-module OpenPGP ( Packet (..)
+module OpenPGP where
+       
+{-       
+       ( Packet (..)
                , PEKSKP (..)
                , Signature3 (..)
+               , Parser
                ) where
+-}
 
 import Data.Enumerator (Iteratee)
 import Data.Attoparsec (Parser, (<?>))
@@ -23,8 +30,13 @@ import Data.Binary (decode)
 import Data.Maybe (fromJust)
 import qualified Data.ByteString.Lazy as B
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+
 import System.Time
 
+import Data.Binary
+import Data.Binary.Get
+import Data.Binary.Put
 
 decodeStrictBS bs = (decode . B.fromChunks) [bs]
                      
@@ -37,6 +49,21 @@ anyWord32 = fmap decodeStrictBS (A.take 4 <?> "word32")
 anyWord64 :: Parser Word64
 anyWord64 = fmap decodeStrictBS (A.take 8 <?> "word64")
 
+parserToGet :: Parser t -> Get t
+parserToGet p = 
+  let getter = A.parseWith byteGetter p BS.empty
+  in do res <- getter
+        handleResult res
+          where handleResult :: A.Result a -> Get a
+                handleResult res = case res of
+                  A.Fail bs ctxs err -> fail err
+                  A.Partial f -> do
+                    res' <- fmap f byteGetter
+                    handleResult res'
+                  A.Done bs r -> return r
+                byteGetter = do
+                  e <- isEmpty
+                  if (e) then return BS.empty else getBytes 1
 
 \end{code}
 
@@ -88,11 +115,20 @@ anyWord64 = fmap decodeStrictBS (A.take 8 <?> "word64")
 
 \begin{code}
 newtype MPI = MPI ByteString
+            deriving (Show, Eq)
+                     
+instance Binary MPI where
+  put (MPI bs) = do 
+    putWord16be . convert . BS.length $ bs
+    putByteString bs
+  get = parserToGet parseMPI
+
 parseMPI :: Parser MPI
 parseMPI = do
   ls <- fmap convert anyWord16
   bs <- (A.take ls <?> "MPI")  
   return $ MPI bs
+    
 \end{code}
 
 
@@ -110,6 +146,8 @@ type KeyID = Word64
 parseKeyID :: Parser KeyID
 parseKeyID = fmap decodeStrictBS (A.take 8 <?> "KeyID")
 
+  
+
 \end{code}
 
 3.4.  Text
@@ -126,6 +164,13 @@ parseTime :: Parser UTCTime
 parseTime = do
   ts <- anyWord32 <?> "TimeField"
   return $ convert $ TOD (convert ts) 0
+  
+instance Binary UTCTime where
+  get = parserToGet parseTime
+  put t = 
+    let (TOD tod _ ) = convert t
+    in putWord32be . convert $ tod
+       
 \end{code}
 
 3.6.  Keyrings
@@ -448,6 +493,7 @@ packetLengthToNum p = lookup p packetLengthCoding
 bodyLenParser :: Num b => PacketLength -> Parser b
 bodyLenParser OneOctedLength = fmap (fromInteger . convert) A.anyWord8
 
+
 \end{code}
 
 
@@ -635,12 +681,41 @@ class Packet t where
        string takes up the remainder of the packet, and its contents are
        dependent on the public-key algorithm used.
 
-
-
 \begin{code}
 
 data PEKSKP = PEKSKP
 
+{-
+  RSAEncryptOrSign | 
+  RSAEncryptOnly |
+  RSASignOnly |
+  ElgamalEncryptOnly |
+  DSA
+-}
+
+d = [234,34,2,34,34,6,63,3,45,76,32,1,34,6,67,3,2]
+st = MkPEKSKP (Just 0x23) DSA (Right (MPI $ BS.pack d, MPI $ BS.pack d))
+
+p = runPut $ put st
+
+g :: B.ByteString -> PacketState PEKSKP
+g = runGet $ get 
+
+g' = g p
+
+r = g' == st
+
+instance Eq (PacketState PEKSKP) where
+  (MkPEKSKP k a d) == (MkPEKSKP k' a' d') = and [k == k', a == a', d == d']
+    
+instance Binary (PacketState PEKSKP) where
+  get = fmap fst $ parserToGet $ parsePacket PEKSKP
+  put ps = do
+    putWord8 0x3
+    putWord64be $ maybe 0 id $ pekskpKeyID ps
+    putWord8 $ (fromJust . publicKeyAlgorithmToNum . pekskpPublicKeyAlgorithm) ps
+    either put (\(a,b) -> do put a ; put b) $ pekskpData ps
+    
 instance Packet PEKSKP where
   data PacketTag PEKSKP = PEKSKPPacketTag
   data PacketState PEKSKP = MkPEKSKP {
@@ -1095,8 +1170,63 @@ instance Packet Signature3 where
    The algorithms for converting the hash function result to a signature
    are described in a section below.
 
-5.2.3.1. Signature Subpacket Specification
 
+\begin{code}
+
+data Signature4 = Signature4
+instance Packet Signature4 where 
+  data PacketTag Signature4 = Signature4PacketTag
+  data PacketState Signature4 = MkSignaturePacket4 {
+    sig4Type :: SignatureType,
+    sig4Time :: UTCTime,
+    sig4KeyID :: KeyID,
+    sig4PKAlgorithm :: PublicKeyAlgorithm,
+    sig4HashAlgorithm :: HashAlgorithm,
+    sig4Data :: Either MPI (MPI, MPI)
+    }
+  packetTag Signature4 = Signature4PacketTag
+  packetTagNum Signature4PacketTag = 0x02
+  bodyParser Signature4 = do
+  _ <- A.word8 4
+  stype <- parseSignatureType
+  pkAlgo <- parsePublicKeyAlgorithm
+  hasha <- parseHashAlgorithm
+  hashedSubPacketLength <- bodyLenParser TwoOctedLength
+  hashedSubpacketData <- A.take hashedSubPacketLength
+  subPacketLength <- bodyLenParser TwoOctedLength
+  subpacketData <- A.take subPacketLength
+  
+  return undefined  
+  
+{-  
+  shv <- anyWord16
+    hashdata <- case (pkAlgo) of
+      RSAEncryptOrSign -> parseRSAMPI
+      RSASignOnly -> parseRSAMPI
+      DSA -> parseDSAMPI
+    let (MPI firstHash) = case (hashdata) of 
+          Left h -> h
+          Right (h, _) -> h
+    if (not $ (convert firstHash) `checkFirstHash` shv) 
+      then fail "signedHashValue check failed"
+      else return $ MkSignaturePacket3 stype t keyid pkAlgo hasha hashdata
+      where parseRSAMPI = fmap Left parseMPI
+            parseDSAMPI = do
+              r <- parseMPI
+              s <- parseMPI
+              return $ Right (r,s)
+            checkFirstHash bs v =
+              let a = convert (bs `B.index` 0)
+                  b = convert (bs `B.index` 1)
+                  v' :: Word16
+                  v' = (a `shiftL` 8) .|. b
+              in v' == v
+-}
+\end{code}
+
+
+
+5.2.3.1. Signature Subpacket Specification
 
    A subpacket data set consists of zero or more Signature subpackets.
    In Signature packets, the subpacket data set is preceded by a two-
@@ -1128,6 +1258,15 @@ instance Packet Signature3 where
        if the 1st octet = 255, then
            lengthOfLength = 5
            subpacket length = [four-octet scalar starting at 2nd_octet]
+
+\begin{code}
+class SignatureSubpacket s where
+  data SignatureSubpacketState s :: *
+  
+    
+\end{code}
+
+
 
    The value of the subpacket type octet may be:
 
