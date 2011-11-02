@@ -16,25 +16,26 @@ import System.Time (ClockTime(..))
 main = do
   chk prop_MPIBinary
   chk prop_KeyIDParser 
-  chk prop_UTCTimeParser
+  chk prop_UTCTimeBinary
   return ()
   where 
     chk :: Testable prop => prop -> IO ()
     chk = quickCheck
  -- chk = verboseCheck
     
-rPut :: (Binary t) => t -> ByteString
+rPut :: Binary t => t -> ByteString
 rPut = runPut . put
 
 rGet :: Binary t => ByteString -> t
 rGet bs = runGet get bs
 
+rPutGet :: Binary t => t -> t
+rPutGet = rGet . rPut
+
 prop_MPIBinary :: [Word8] -> Property
 prop_MPIBinary bs =
   let mpi = (MPI . BS.pack) bs
-      empi = rPut mpi
-      dmpi = rGet empi
-  in label "binary encoding / decoding of MPI" (mpi == dmpi)
+  in label "binary encoding / decoding of MPI" (mpi == rPutGet mpi)
   
 
 prop_KeyIDParser :: KeyID -> Property
@@ -46,18 +47,9 @@ prop_KeyIDParser kid =
         Just a -> a
   in label "KeyID parser test" (kid == dkid)
      
-prop_UTCTimeParser :: Integer -> Property
-prop_UTCTimeParser i = 
+prop_UTCTimeBinary :: Integer -> Property
+prop_UTCTimeBinary i = 
   let utc :: UTCTime
       utc = convert $ TOD (abs i) 0
-  in label "UTCTime parser test" $ 
-     case (A.maybeResult $ A.parse parseTime (convert $ rPut utc)) of
-       Nothing -> error "unable to parse Time"
-       Just utc' -> utc == utc' 
+  in label "UTCTime parser test" $ utc == rPutGet utc
 
-{-
-instance Arbitrary UTCTime where
-  arbitrary = do
-    offset <- choose (0, 20000) :: Gen Float
-    return . fromMJD' $ offset + fromRational startOfTimeMJD
--}
