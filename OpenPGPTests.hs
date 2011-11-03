@@ -14,22 +14,26 @@ import Data.Convertible
 import Data.Time (UTCTime(..), secondsToDiffTime, Day (..))
 import System.Time (ClockTime(..))
 
-main = do
-  chk prop_MPIBinary
-  chk prop_KeyIDParser 
-  chk prop_UTCTimeBinary
-  chk prop_StringToKeySpecifierBinary
-  chk prop_SignatureTypeBinary
-  chk prop_PublicKeyAlgorithmBinary
-  chk prop_PEKSKPBinary
-  chk prop_Signature3Binary
-  return ()
-  where 
-    chk :: Testable prop => prop -> IO ()
-    --chk = quickCheck    
-    chk = verboseCheck
-    
-    
+import Test.Framework (defaultMain, testGroup)
+import Test.Framework.Providers.QuickCheck2 (testProperty)
+
+main = defaultMain tests
+
+tests = [
+        testGroup "Data Type Tests" [
+                testProperty "MPI binary test" prop_MPIBinary,
+                testProperty "KeyID binary test" prop_KeyIDParser,
+                testProperty "UTCTime binary test" prop_UTCTimeBinary,
+                testProperty "StringToKeySpecifier binary test" prop_StringToKeySpecifierBinary,
+                testProperty "SignatureType binary test" prop_SignatureTypeBinary,
+                testProperty "PublickeyAlgorithm binary test" prop_PublicKeyAlgorithmBinary
+            ],
+        testGroup "Packet Binary Tests" [
+                testProperty "PEKSKP binary test" prop_PEKSKPBinary,
+                testProperty "Signature v3 test" prop_Signature3Binary
+            ]
+    ]
+
 instance Arbitrary HashAlgorithm where
   arbitrary = elements [ MD5,SHA1,RIPEMD160,SHA256,SHA384,SHA512,SHA224 ]
         
