@@ -19,6 +19,8 @@ main = do
   chk prop_KeyIDParser 
   chk prop_UTCTimeBinary
   chk prop_StringToKeySpecifierBinary
+  chk prop_SignatureTypeBinary
+  chk prop_PublicKeyAlgorithmBinary
   chk prop_PEKSKPBinary
   return ()
   where 
@@ -77,16 +79,28 @@ instance Arbitrary StringToKeySpecifier where
       1 -> SaltedS2K a s
       2 -> IteratedAndSaltedS2K a s i
 
-
 prop_StringToKeySpecifierBinary :: StringToKeySpecifier -> Property
 prop_StringToKeySpecifierBinary s2k =  
   label "StringToKeySpecifier binary test" $ s2k == rPutGet s2k
   
+instance Arbitrary SignatureType where
+  arbitrary = elements $ map fst signatureTypeCoding
+
+prop_SignatureTypeBinary :: SignatureType -> Property    
+prop_SignatureTypeBinary s = 
+  label "SignatureType binary test" $ s == rPutGet s
   
+instance Arbitrary PublicKeyAlgorithm where
+  arbitrary = elements $ map fst publicKeyAlgorithmCoding  
+
+prop_PublicKeyAlgorithmBinary :: PublicKeyAlgorithm -> Property
+prop_PublicKeyAlgorithmBinary a =
+  label "PublicKeyAlgorithm binary test" $ a == rPutGet a
   
 instance Arbitrary (PacketState PEKSKP) where
   arbitrary = do
-    keyid <- arbitrary
+    keyid' <- arbitrary
+    let keyid = if (keyid' == 0) then Nothing else Just keyid'
     a <- arbitrary
     b <- arbitrary
     n <- choose (0, 2) :: Gen Int
@@ -98,3 +112,5 @@ instance Arbitrary (PacketState PEKSKP) where
 prop_PEKSKPBinary :: PacketState PEKSKP -> Property
 prop_PEKSKPBinary p = 
     label "PacketState PEKSKP binary test" $ p == rPutGet p
+    
+

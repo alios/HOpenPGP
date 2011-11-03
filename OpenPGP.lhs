@@ -961,6 +961,13 @@ parseSignatureType = do
   case (lookupSignatureType w) of
     Nothing -> fail "unknown signature type"
     Just a -> return a    
+    
+instance Binary SignatureType where
+  get = parserToGet parseSignatureType
+  put s = case (signatureTypeToNum s) of
+    Nothing -> fail $ "unknown signature type " ++ show s 
+    Just s' -> putWord8 s'
+  
 \end{code}
 
 5.2.2. Version 3 Signature Packet Format
@@ -996,6 +1003,16 @@ parseSignatureType = do
 
 \begin{code}
 
+instance Eq (PacketState Signature3) where
+  (MkSignaturePacket3 ty t k a h d) == (MkSignaturePacket3 ty' t' k' a' h' d') = 
+    and [ty == ty', t == t', k == k', a == a', h == h', d == d']
+    
+instance Binary (PacketState Signature3) where
+  put = putPacket
+  get = fmap fst (getPacket Signature3)
+    
+
+
 data Signature3 = Signature3
 instance Packet Signature3 where 
   data PacketTag Signature3 = Signature3PacketTag
@@ -1008,7 +1025,20 @@ instance Packet Signature3 where
     sig3Data :: Either MPI (MPI, MPI)
     }
   packetTag Signature3 = Signature3PacketTag
+  packetTag' _ = Signature3PacketTag
   packetTagNum Signature3PacketTag = 0x02
+  putPacketBody st = do
+    putWord8 0x03
+    putWord8 0x05
+    put $ sig3Type st
+    put $ sig3Time st
+    putWord64be $ sig3KeyID st
+    put $ sig3PKAlgorithm st
+    put $ sig3HashAlgorithm st
+    case (sig3Data st) of
+      Left a -> put a
+      Right (a,b) -> do put a; put b
+
   bodyParser Signature3 = do
   _ <- A.word8 3
   l <- bodyLenParser OneOctedLength  
@@ -3106,6 +3136,13 @@ parsePublicKeyAlgorithm = do
   case (lookupPublicKeyAlgorithm w) of
     Nothing -> fail "unknown public key algorithm"
     Just a -> return a    
+    
+instance Binary PublicKeyAlgorithm where
+  get = parserToGet parsePublicKeyAlgorithm
+  put a = case (publicKeyAlgorithmToNum a) of 
+    Nothing -> fail $ "unknown PublicKeyAlgorithm " ++ show a
+    Just a' -> putWord8 a'
+    
 \end{code}
 
 9.2. Symmetric-Key Algorithms
