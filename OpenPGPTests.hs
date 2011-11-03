@@ -26,8 +26,8 @@ main = do
   return ()
   where 
     chk :: Testable prop => prop -> IO ()
-    chk = quickCheck
---    chk = verboseCheck
+    --chk = quickCheck    
+    chk = verboseCheck
     
     
 instance Arbitrary HashAlgorithm where
@@ -45,10 +45,8 @@ rPutGet = rGet . rPut
 instance Arbitrary MPI where
   arbitrary = fmap (MPI . BS.pack) arbitrary
     
-prop_MPIBinary :: [Word8] -> Property
-prop_MPIBinary bs =
-  let mpi = (MPI . BS.pack) bs
-  in label "MPI binary test" (mpi == rPutGet mpi)
+prop_MPIBinary :: MPI -> Property
+prop_MPIBinary mpi = label "MPI binary test" (mpi == rPutGet mpi)
   
 
 prop_KeyIDParser :: KeyID -> Property
