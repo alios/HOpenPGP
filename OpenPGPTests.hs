@@ -11,7 +11,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.Attoparsec as A
 import Data.Convertible
-import Data.Time (UTCTime(..), picosecondsToDiffTime)
+import Data.Time (UTCTime(..), secondsToDiffTime, Day (..))
 import System.Time (ClockTime(..))
 
 main = do
@@ -22,6 +22,7 @@ main = do
   chk prop_SignatureTypeBinary
   chk prop_PublicKeyAlgorithmBinary
   chk prop_PEKSKPBinary
+  chk prop_Signature3Binary
   return ()
   where 
     chk :: Testable prop => prop -> IO ()
@@ -44,8 +45,6 @@ rPutGet = rGet . rPut
 instance Arbitrary MPI where
   arbitrary = fmap (MPI . BS.pack) arbitrary
     
-    
-
 prop_MPIBinary :: [Word8] -> Property
 prop_MPIBinary bs =
   let mpi = (MPI . BS.pack) bs
@@ -61,11 +60,15 @@ prop_KeyIDParser kid =
         Just a -> a
   in label "KeyID parser test" (kid == dkid)
      
-prop_UTCTimeBinary :: Integer -> Property
-prop_UTCTimeBinary i = 
-  let utc :: UTCTime
-      utc = convert $ TOD (abs i) 0
-  in label "UTCTime binary test" $ utc == rPutGet utc
+
+instance Arbitrary UTCTime where
+  arbitrary = do
+  i <- arbitrary :: Gen Word32
+  return $ convert $ TOD (abs $ convert i) 0
+
+prop_UTCTimeBinary :: UTCTime -> Property
+prop_UTCTimeBinary t = 
+  label "UTCTime binary test" $ t == rPutGet t
 
 
 instance Arbitrary StringToKeySpecifier where
@@ -105,12 +108,30 @@ instance Arbitrary (PacketState PEKSKP) where
     b <- arbitrary
     n <- choose (0, 2) :: Gen Int
     return $ case n of 
-             0 -> MkPEKSKP keyid RSAEncryptOrSign (Left a)
-             1 -> MkPEKSKP keyid RSAEncryptOrSign (Left a)
-             2 -> MkPEKSKP keyid ElgamalEncryptOnly (Right (a,b))
+      0 -> MkPEKSKP keyid RSAEncryptOrSign (Left a)
+      1 -> MkPEKSKP keyid RSAEncryptOrSign (Left a)
+      2 -> MkPEKSKP keyid ElgamalEncryptOnly (Right (a,b))
     
 prop_PEKSKPBinary :: PacketState PEKSKP -> Property
 prop_PEKSKPBinary p = 
     label "PacketState PEKSKP binary test" $ p == rPutGet p
     
 
+prop_Signature3Binary :: PacketState Signature3 -> Property
+prop_Signature3Binary p = 
+    label "PacketState Signature3 binary test" $ p == rPutGet p
+
+instance Arbitrary (PacketState Signature3) where
+  arbitrary = do
+    ty <- arbitrary
+    t <- arbitrary
+    k <- arbitrary
+    a <- elements [ RSAEncryptOrSign, RSASignOnly, DSA ]
+    h <- arbitrary
+    f <- arbitrary
+    d <- case a of 
+      RSAEncryptOrSign -> fmap Left arbitrary
+      RSASignOnly -> fmap Left arbitrary
+      DSA -> fmap Right arbitrary
+    return $ MkSignaturePacket3 ty t k a h f d
+    

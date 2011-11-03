@@ -42,13 +42,13 @@ import Data.Binary.Put
 decodeStrictBS bs = (decode . B.fromChunks) [bs]
                      
 anyWord16 :: Parser Word16
-anyWord16 = fmap decodeStrictBS (A.take 2 <?> "word16")
+anyWord16 = fmap (\bs -> runGet getWord16be $ convert bs) (A.take 2 <?> "word16")
 
 anyWord32 :: Parser Word32
-anyWord32 = fmap decodeStrictBS (A.take 4 <?> "word32")
+anyWord32 = fmap (\bs -> runGet getWord32be $ convert bs) (A.take 4 <?> "word32")
 
 anyWord64 :: Parser Word64
-anyWord64 = fmap decodeStrictBS (A.take 8 <?> "word64")
+anyWord64 = fmap (\bs -> runGet getWord64be $ convert bs) (A.take 8 <?> "word64")
 
 parserToGet :: Parser t -> Get t
 parserToGet p = 
@@ -170,7 +170,9 @@ instance Binary UTCTime where
   get = parserToGet parseTime
   put t = 
     let (TOD tod _ ) = convert t
-    in putWord32be . convert $ tod
+    in if (tod > convert (maxBound :: Word32) || tod < convert (minBound :: Word32)) 
+       then fail $ "timestamp is out of bound: " ++ show tod
+       else putWord32be . convert $ tod
        
 \end{code}
 
@@ -1000,19 +1002,27 @@ instance Binary SignatureType where
    Signature packet to provide a quick test to reject some invalid
    signatures.
 
+   Algorithm-Specific Fields for RSA signatures:
+
+     - multiprecision integer (MPI) of RSA signature value m**d mod n.
+
+   Algorithm-Specific Fields for DSA signatures:
+
+     - MPI of DSA value r.
+
+     - MPI of DSA value s.
+
 
 \begin{code}
 
 instance Eq (PacketState Signature3) where
-  (MkSignaturePacket3 ty t k a h d) == (MkSignaturePacket3 ty' t' k' a' h' d') = 
-    and [ty == ty', t == t', k == k', a == a', h == h', d == d']
+  (MkSignaturePacket3 ty t k a h f d) == (MkSignaturePacket3 ty' t' k' a' h' f' d') = 
+    and [ty == ty', t == t', k == k', a == a', h == h', f == f', d == d']
     
 instance Binary (PacketState Signature3) where
   put = putPacket
   get = fmap fst (getPacket Signature3)
     
-
-
 data Signature3 = Signature3
 instance Packet Signature3 where 
   data PacketTag Signature3 = Signature3PacketTag
@@ -1022,23 +1032,36 @@ instance Packet Signature3 where
     sig3KeyID :: KeyID,
     sig3PKAlgorithm :: PublicKeyAlgorithm,
     sig3HashAlgorithm :: HashAlgorithm,
-    sig3Data :: Either MPI (MPI, MPI)
-    }
+    sig3FirstBytes :: Word16,
+    sig3SignatureData :: Either MPI (MPI, MPI)
+    } deriving (Show)
+  
   packetTag Signature3 = Signature3PacketTag
   packetTag' _ = Signature3PacketTag
   packetTagNum Signature3PacketTag = 0x02
+  
   putPacketBody st = do
-    putWord8 0x03
-    putWord8 0x05
-    put $ sig3Type st
-    put $ sig3Time st
-    putWord64be $ sig3KeyID st
-    put $ sig3PKAlgorithm st
-    put $ sig3HashAlgorithm st
-    case (sig3Data st) of
-      Left a -> put a
-      Right (a,b) -> do put a; put b
-
+    putWord8 0x03 -- packet version
+    putWord8 0x05 -- fixed packet length of 5
+    put $ sig3Type st -- signature type
+    put $ sig3Time st -- timestamp
+    putWord64be $ sig3KeyID st -- key id
+    let pk = sig3PKAlgorithm st 
+    put pk -- publice key algo
+    put $ sig3HashAlgorithm st -- hash algo
+    putWord16be $ sig3FirstBytes st -- fist 2 bytes of hashed data
+    let rsaData = case (sig3SignatureData st) of
+          Left a -> put a
+          Right _ -> error $ "signature data is not RSA Data"
+    let dsaData = case (sig3SignatureData st) of
+          Right (a,b) -> do put a ; put b
+          Left _ -> error $ "signature data is not DSA Data"
+    case pk of
+      RSAEncryptOrSign -> rsaData
+      RSASignOnly -> rsaData
+      DSA -> dsaData
+      otherwise -> error $ "unknown public key algorithm " ++ show pk
+        
   bodyParser Signature3 = do
   _ <- A.word8 3
   l <- bodyLenParser OneOctedLength  
@@ -1054,35 +1077,15 @@ instance Packet Signature3 where
       RSAEncryptOrSign -> parseRSAMPI
       RSASignOnly -> parseRSAMPI
       DSA -> parseDSAMPI
-    let (MPI firstHash) = case (hashdata) of 
-          Left h -> h
-          Right (h, _) -> h
-    if (not $ (convert firstHash) `checkFirstHash` shv) 
-      then fail "signedHashValue check failed"
-      else return $ MkSignaturePacket3 stype t keyid pkAlgo hasha hashdata
+      otherwise -> fail $ "unknown public key algorithm " ++ show pkAlgo
+    return $ MkSignaturePacket3 stype t keyid pkAlgo hasha shv hashdata  
       where parseRSAMPI = fmap Left parseMPI
             parseDSAMPI = do
               r <- parseMPI
               s <- parseMPI
               return $ Right (r,s)
-            checkFirstHash bs v =
-              let a = convert (bs `B.index` 0)
-                  b = convert (bs `B.index` 1)
-                  v' :: Word16
-                  v' = (a `shiftL` 8) .|. b
-              in v' == v
 
 \end{code}
-
-   Algorithm-Specific Fields for RSA signatures:
-
-     - multiprecision integer (MPI) of RSA signature value m**d mod n.
-
-   Algorithm-Specific Fields for DSA signatures:
-
-     - MPI of DSA value r.
-
-     - MPI of DSA value s.
 
    The signature calculation is based on a hash of the signed data, as
    described above.  The details of the calculation are different for
@@ -1226,8 +1229,11 @@ instance Packet Signature4 where
     sig4HashAlgorithm :: HashAlgorithm,
     sig4Data :: Either MPI (MPI, MPI)
     }
+                                
   packetTag Signature4 = Signature4PacketTag
+  packetTag' _ = Signature4PacketTag
   packetTagNum Signature4PacketTag = 0x02
+  
   bodyParser Signature4 = do
   _ <- A.word8 4
   stype <- parseSignatureType
@@ -1237,7 +1243,6 @@ instance Packet Signature4 where
   hashedSubpacketData <- A.take hashedSubPacketLength
   subPacketLength <- bodyLenParser TwoOctedLength
   subpacketData <- A.take subPacketLength
-  
   return undefined  
   
 {-  
