@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 
 module Main where
 
@@ -18,6 +19,7 @@ main = do
   chk prop_KeyIDParser 
   chk prop_UTCTimeBinary
   chk prop_StringToKeySpecifierBinary
+  chk prop_PEKSKPBinary
   return ()
   where 
     chk :: Testable prop => prop -> IO ()
@@ -27,18 +29,7 @@ main = do
     
 instance Arbitrary HashAlgorithm where
   arbitrary = elements [ MD5,SHA1,RIPEMD160,SHA256,SHA384,SHA512,SHA224 ]
-  
-instance Arbitrary StringToKeySpecifier where
-  arbitrary = do
-    n <- choose (0, 2) :: Gen Int
-    a <- arbitrary
-    s <- arbitrary
-    i <- arbitrary
-    return $ case n of
-      0 -> SimpleS2K a
-      1 -> SaltedS2K a s
-      2 -> IteratedAndSaltedS2K a s i
-      
+        
 rPut :: Binary t => t -> ByteString
 rPut = runPut . put
 
@@ -48,10 +39,15 @@ rGet bs = runGet get bs
 rPutGet :: Binary t => t -> t
 rPutGet = rGet . rPut
 
+instance Arbitrary MPI where
+  arbitrary = fmap (MPI . BS.pack) arbitrary
+    
+    
+
 prop_MPIBinary :: [Word8] -> Property
 prop_MPIBinary bs =
   let mpi = (MPI . BS.pack) bs
-  in label "binary encoding / decoding of MPI" (mpi == rPutGet mpi)
+  in label "MPI binary test" (mpi == rPutGet mpi)
   
 
 prop_KeyIDParser :: KeyID -> Property
@@ -69,8 +65,36 @@ prop_UTCTimeBinary i =
       utc = convert $ TOD (abs i) 0
   in label "UTCTime binary test" $ utc == rPutGet utc
 
+
+instance Arbitrary StringToKeySpecifier where
+  arbitrary = do
+    n <- choose (0, 2) :: Gen Int
+    a <- arbitrary
+    s <- arbitrary
+    i <- arbitrary
+    return $ case n of
+      0 -> SimpleS2K a
+      1 -> SaltedS2K a s
+      2 -> IteratedAndSaltedS2K a s i
+
+
 prop_StringToKeySpecifierBinary :: StringToKeySpecifier -> Property
 prop_StringToKeySpecifierBinary s2k =  
   label "StringToKeySpecifier binary test" $ s2k == rPutGet s2k
   
   
+  
+instance Arbitrary (PacketState PEKSKP) where
+  arbitrary = do
+    keyid <- arbitrary
+    a <- arbitrary
+    b <- arbitrary
+    n <- choose (0, 2) :: Gen Int
+    return $ case n of 
+             0 -> MkPEKSKP keyid RSAEncryptOrSign (Left a)
+             1 -> MkPEKSKP keyid RSAEncryptOrSign (Left a)
+             2 -> MkPEKSKP keyid ElgamalEncryptOnly (Right (a,b))
+    
+prop_PEKSKPBinary :: PacketState PEKSKP -> Property
+prop_PEKSKPBinary p = 
+    label "PacketState PEKSKP binary test" $ p == rPutGet p

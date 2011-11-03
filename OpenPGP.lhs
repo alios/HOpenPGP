@@ -5,6 +5,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module OpenPGP where
        
@@ -144,7 +145,7 @@ parseMPI = do
 type KeyID = Word64
 
 parseKeyID :: Parser KeyID
-parseKeyID = fmap decodeStrictBS (A.take 8 <?> "KeyID")
+parseKeyID = fmap (\bs -> runGet getWord64be $ convert bs) (A.take 8 <?> "KeyID")
 
   
 
@@ -224,7 +225,7 @@ instance Binary StringToKeySpecifier where
     put a
     put s
   put (IteratedAndSaltedS2K a s i) = do
-    putWord8 0x02
+    putWord8 0x03
     put a
     put s
     putWord8 i
@@ -315,7 +316,7 @@ parseSaltedS2K = do
 
 parseIteratedAndSaltedS2K :: Parser StringToKeySpecifier
 parseIteratedAndSaltedS2K = do
-  _ <- A.word8 0x02
+  _ <- A.word8 0x03
   hashAlgo <- parseHashAlgorithm
   saltValue <- anyWord64
   cnt <- A.anyWord8
@@ -639,10 +640,18 @@ class Packet t where
   data PacketState t :: *
   data PacketTag t :: *
   packetTag :: t -> PacketTag t
+  packetTag' :: (PacketState t) -> PacketTag t
   packetTagNum :: PacketTag t -> Word8
   bodyParser :: t -> Parser (PacketState t)
   isOldPacketTag :: PacketTag t -> Bool
   isOldPacketTag = ((<) 16) . packetTagNum
+  putPacketBody :: PacketState t -> Put
+  putPacket :: PacketState t -> Put
+  putPacket st = do
+    putWord8 $ (packetTagNum . packetTag') st -- TODO: support old packet header format 
+    putPacketBody st
+  getPacket :: t -> Get (PacketState t, Maybe PacketLength)
+  getPacket = parserToGet . parsePacket
   parsePacket ::  t -> Parser (PacketState t, Maybe PacketLength)
   parsePacket t =
     let n = (packetTagNum . packetTag) t 
@@ -652,7 +661,7 @@ class Packet t where
       let maskedPacket = w .&. 0x3f
       if (w `testBit` 7)
         then fail $ "no valid packet header"
-        else if (maskedPacket == n) then fail $ "read invalid header tag " ++ show maskedPacket
+        else if (maskedPacket /= n) then fail $ "read invalid header tag " ++ show maskedPacket
                else if (isOld) 
                       then do
                         body <- bodyParser t
@@ -663,6 +672,8 @@ class Packet t where
                         body <- bodyParser t
                         return (body, Nothing)
 
+
+  
 \end{code}
 
 
@@ -697,6 +708,16 @@ class Packet t where
        string takes up the remainder of the packet, and its contents are
        dependent on the public-key algorithm used.
 
+   Algorithm Specific Fields for RSA encryption
+
+     - multiprecision integer (MPI) of RSA encrypted value m**e mod n.
+
+   Algorithm Specific Fields for Elgamal encryption:
+
+     - MPI of Elgamal (Diffie-Hellman) value g**k mod p.
+
+     - MPI of Elgamal (Diffie-Hellman) value m * y**k mod p.
+
 \begin{code}
 
 data PEKSKP = PEKSKP
@@ -710,27 +731,23 @@ data PEKSKP = PEKSKP
 -}
 
 d = [234,34,2,34,34,6,63,3,45,76,32,1,34,6,67,3,2]
-st = MkPEKSKP (Just 0x23) DSA (Right (MPI $ BS.pack d, MPI $ BS.pack d))
+st = MkPEKSKP (Just 0x23) RSAEncryptOrSign (Left . MPI $ BS.pack d)
 
-p = runPut $ put st
+p = runPut $ putPacket st
+p' = B.unpack p
 
-g :: B.ByteString -> PacketState PEKSKP
-g = runGet $ get 
+g :: B.ByteString -> (PacketState PEKSKP, Maybe PacketLength)
+g bs = runGet (getPacket PEKSKP) bs
 
 g' = g p
 
-r = g' == st
-
+x = fst g' == st
 instance Eq (PacketState PEKSKP) where
   (MkPEKSKP k a d) == (MkPEKSKP k' a' d') = and [k == k', a == a', d == d']
     
 instance Binary (PacketState PEKSKP) where
-  get = fmap fst $ parserToGet $ parsePacket PEKSKP
-  put ps = do
-    putWord8 0x3
-    putWord64be $ maybe 0 id $ pekskpKeyID ps
-    putWord8 $ (fromJust . publicKeyAlgorithmToNum . pekskpPublicKeyAlgorithm) ps
-    either put (\(a,b) -> do put a ; put b) $ pekskpData ps
+  put = putPacket
+  get = fmap fst (getPacket PEKSKP)
     
 instance Packet PEKSKP where
   data PacketTag PEKSKP = PEKSKPPacketTag
@@ -738,8 +755,9 @@ instance Packet PEKSKP where
     pekskpKeyID :: Maybe KeyID,
     pekskpPublicKeyAlgorithm :: PublicKeyAlgorithm,
     pekskpData :: Either MPI (MPI, MPI)
-    } 
+    } deriving (Show)
   packetTag _ = PEKSKPPacketTag
+  packetTag' _ = PEKSKPPacketTag
   packetTagNum _ = 0x01
   bodyParser PEKSKP = do
     _ <- A.word8 3
@@ -750,23 +768,21 @@ instance Packet PEKSKP where
       RSAEncryptOrSign -> parseRSAEncryptedSessionKey
       RSAEncryptOnly -> parseRSAEncryptedSessionKey
       ElgamalEncryptOnly -> parseElgamalEncryptedSessionKey
+      otherwise -> fail $ "unknown encryption algorithm " ++ show algo
     return $ MkPEKSKP keyid algo encKey
       where parseRSAEncryptedSessionKey = fmap Left parseMPI
             parseElgamalEncryptedSessionKey = do
               a <- parseMPI
               b <- parseMPI
               return $ Right (a, b)
+  putPacketBody ps = do
+    putWord8 0x3
+    putWord64be $ maybe 0 id $ pekskpKeyID ps
+    putWord8 $ (fromJust . publicKeyAlgorithmToNum . pekskpPublicKeyAlgorithm) ps
+    either put (\(a,b) -> do put a ; put b) $ pekskpData ps
+
+
 \end{code}
-
-   Algorithm Specific Fields for RSA encryption
-
-     - multiprecision integer (MPI) of RSA encrypted value m**e mod n.
-
-   Algorithm Specific Fields for Elgamal encryption:
-
-     - MPI of Elgamal (Diffie-Hellman) value g**k mod p.
-
-     - MPI of Elgamal (Diffie-Hellman) value m * y**k mod p.
 
    The value "m" in the above formulas is derived from the session key
    as follows.  First, the session key is prefixed with a one-octet
