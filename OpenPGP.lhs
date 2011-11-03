@@ -722,26 +722,6 @@ class Packet t where
 
 data PEKSKP = PEKSKP
 
-{-
-  RSAEncryptOrSign | 
-  RSAEncryptOnly |
-  RSASignOnly |
-  ElgamalEncryptOnly |
-  DSA
--}
-
-d = [234,34,2,34,34,6,63,3,45,76,32,1,34,6,67,3,2]
-st = MkPEKSKP (Just 0x23) RSAEncryptOrSign (Left . MPI $ BS.pack d)
-
-p = runPut $ putPacket st
-p' = B.unpack p
-
-g :: B.ByteString -> (PacketState PEKSKP, Maybe PacketLength)
-g bs = runGet (getPacket PEKSKP) bs
-
-g' = g p
-
-x = fst g' == st
 instance Eq (PacketState PEKSKP) where
   (MkPEKSKP k a d) == (MkPEKSKP k' a' d') = and [k == k', a == a', d == d']
     
