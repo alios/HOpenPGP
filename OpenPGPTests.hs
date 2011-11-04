@@ -23,6 +23,7 @@ tests = [
         testGroup "Data Type Tests" [
                 testProperty "MPI binary test" prop_MPIBinary,
                 testProperty "KeyID binary test" prop_KeyIDParser,
+                testProperty "1,2,5 length binary test" prop_125LengthBinary,
                 testProperty "UTCTime binary test" prop_UTCTimeBinary,
                 testProperty "StringToKeySpecifier binary test" prop_StringToKeySpecifierBinary,
                 testProperty "SignatureType binary test" prop_SignatureTypeBinary,
@@ -62,6 +63,15 @@ prop_KeyIDParser kid =
         Just a -> a
   in label "KeyID parser test" (kid == dkid)
      
+
+prop_125LengthBinary :: Word8 -> Property
+prop_125LengthBinary i' = 
+  let i = convert i'
+      putI = runPut $ put125Length i
+      get125Length = parserToGet parse125Length
+      getI = runGet get125Length putI
+  in label "1,2,5 octet length binary test" $ 
+     (i == getI)
 
 instance Arbitrary UTCTime where
   arbitrary = do
