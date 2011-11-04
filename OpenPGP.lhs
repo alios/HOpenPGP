@@ -505,7 +505,7 @@ parse125Length = do
          else do
            o2 <- A.anyWord8
            let res :: Word16
-               res = ((convert (o1 - 192)) `shiftL` 8) + (convert o2) + 192
+               res = ((convert (o1 - 192)) `shiftL` 8) + (convert $ o2 + 192)
            return $ (fromInteger . convert) res
            
 put125Length :: Word32 -> Put
@@ -519,6 +519,8 @@ put125Length l
   | otherwise = do fail $ "unable to encode length value. it is to big " ++ show l
   where maxWord32 = (fromInteger . convert) (maxBound :: Word32)
 
+p i = runPut $ put125Length i
+p' = B.unpack .p 
 \end{code}
 
 
