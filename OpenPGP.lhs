@@ -2,6 +2,7 @@
 
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -495,7 +496,29 @@ lookupPacketLength :: Word8 -> Maybe PacketLength
 lookupPacketLength i = lookup i $ map swap packetLengthCoding
 packetLengthToNum :: PacketLength -> Maybe Word8
 packetLengthToNum p = lookup p packetLengthCoding
-                      
+
+parse125Length :: Num b => Parser b
+parse125Length = do
+  o1 <- A.anyWord8
+  if (o1 < 192) then return $ (fromInteger . convert) o1
+    else if (o1 == 255) then fmap (fromInteger . convert) anyWord32
+         else do
+           o2 <- A.anyWord8
+           let res :: Word16
+               res = ((convert (o1 - 192)) `shiftL` 8) + (convert o2) + 192
+           return $ (fromInteger . convert) res
+           
+put125Length :: Word32 -> Put
+put125Length l
+  | (l >= 0) && (l <= 191) = putWord8 $ convert l
+  | (l >= 192) && (l <= 8383) = do
+    let bs = runPut $ putWord16be $ (convert l) 
+    put $ (B.index bs 0) + 192
+    put $ (B.index bs 1) - 192
+  | (l >= 8384) && (l <= maxWord32) = do putWord8 255 ; put $ l
+  | otherwise = do fail $ "unable to encode length value. it is to big " ++ show l
+  where maxWord32 = (fromInteger . convert) (maxBound :: Word32)
+
 \end{code}
 
 
@@ -562,6 +585,8 @@ bodyLenParser FiveOctedLength = fmap (fromInteger . convert) $ do
       o4 = (convert o4') `shiftL` 8
       o5 = convert o5'
   return $ o2 .|. o3 .|. o4 .|. o5
+
+  
 
 \end{code}
 
@@ -1049,7 +1074,7 @@ instance Packet Signature3 where
     let pk = sig3PKAlgorithm st 
     put pk -- publice key algo
     put $ sig3HashAlgorithm st -- hash algo
-    putWord16be $ sig3FirstBytes st -- fist 2 bytes of hashed data
+    putWord16be $ sig3FirstBytes st -- first 2 bytes of hashed data
     let rsaData = case (sig3SignatureData st) of
           Left a -> put a
           Right _ -> error $ "signature data is not RSA Data"
@@ -1073,17 +1098,21 @@ instance Packet Signature3 where
     pkAlgo <- parsePublicKeyAlgorithm
     hasha <- parseHashAlgorithm
     shv <- anyWord16
-    hashdata <- case (pkAlgo) of
-      RSAEncryptOrSign -> parseRSAMPI
-      RSASignOnly -> parseRSAMPI
-      DSA -> parseDSAMPI
-      otherwise -> fail $ "unknown public key algorithm " ++ show pkAlgo
+    hashdata <- parseSignatureData pkAlgo
     return $ MkSignaturePacket3 stype t keyid pkAlgo hasha shv hashdata  
-      where parseRSAMPI = fmap Left parseMPI
-            parseDSAMPI = do
-              r <- parseMPI
-              s <- parseMPI
-              return $ Right (r,s)
+
+parseSignatureData :: PublicKeyAlgorithm -> Parser (Either MPI (MPI, MPI))
+parseSignatureData pkAlgo = case (pkAlgo) of
+  RSAEncryptOrSign -> parseRSAMPI
+  RSASignOnly -> parseRSAMPI
+  DSA -> parseDSAMPI
+  otherwise -> fail $ "unknown public key algorithm " ++ show pkAlgo
+  where parseRSAMPI = fmap Left parseMPI
+        parseDSAMPI = do
+          r <- parseMPI
+          s <- parseMPI
+          return $ Right (r,s)
+
 
 \end{code}
 
@@ -1227,48 +1256,31 @@ instance Packet Signature4 where
     sig4KeyID :: KeyID,
     sig4PKAlgorithm :: PublicKeyAlgorithm,
     sig4HashAlgorithm :: HashAlgorithm,
-    sig4Data :: Either MPI (MPI, MPI)
-    }
+    sig4FirstBytes :: Word16,
+    sig4SignatureData :: Either MPI (MPI, MPI)
+    } deriving (Show)
                                 
   packetTag Signature4 = Signature4PacketTag
   packetTag' _ = Signature4PacketTag
   packetTagNum Signature4PacketTag = 0x02
   
   bodyParser Signature4 = do
-  _ <- A.word8 4
-  stype <- parseSignatureType
-  pkAlgo <- parsePublicKeyAlgorithm
-  hasha <- parseHashAlgorithm
-  hashedSubPacketLength <- bodyLenParser TwoOctedLength
-  hashedSubpacketData <- A.take hashedSubPacketLength
-  subPacketLength <- bodyLenParser TwoOctedLength
-  subpacketData <- A.take subPacketLength
-  return undefined  
+    _ <- A.word8 4 -- packet version
+    stype <- parseSignatureType -- signature type
+    pkAlgo <- parsePublicKeyAlgorithm -- public key algo
+    hasha <- parseHashAlgorithm -- hash algo
+    hashedSubpacketLength <- bodyLenParser TwoOctedLength -- length of hashed subpackets
+    hashedSubpacketData <- A.take hashedSubpacketLength -- hashed subpackets as bytestring
+    let hashedSubpackets = runGet $ (parserToGet . parseSig4SubPackets) hashedSubpacketData -- parse hashed subpackets
+    subpacketLength <- bodyLenParser TwoOctedLength -- length of unhashed subpackets
+    subpacketData <- A.take subpacketLength -- unhashed subpackets as bytestring
+    let subpackets = runGet $ (parserToGet . parseSig4SubPackets) subpacketData -- parse unhashed subpackets
+    shv <- anyWord16 -- first 2 bytes of hashed data
+    sigData <- parseSignatureData pkAlgo
+    return undefined  
   
-{-  
-  shv <- anyWord16
-    hashdata <- case (pkAlgo) of
-      RSAEncryptOrSign -> parseRSAMPI
-      RSASignOnly -> parseRSAMPI
-      DSA -> parseDSAMPI
-    let (MPI firstHash) = case (hashdata) of 
-          Left h -> h
-          Right (h, _) -> h
-    if (not $ (convert firstHash) `checkFirstHash` shv) 
-      then fail "signedHashValue check failed"
-      else return $ MkSignaturePacket3 stype t keyid pkAlgo hasha hashdata
-      where parseRSAMPI = fmap Left parseMPI
-            parseDSAMPI = do
-              r <- parseMPI
-              s <- parseMPI
-              return $ Right (r,s)
-            checkFirstHash bs v =
-              let a = convert (bs `B.index` 0)
-                  b = convert (bs `B.index` 1)
-                  v' :: Word16
-                  v' = (a `shiftL` 8) .|. b
-              in v' == v
--}
+parseSig4SubPackets = undefined
+
 \end{code}
 
 
@@ -1307,6 +1319,7 @@ instance Packet Signature4 where
            subpacket length = [four-octet scalar starting at 2nd_octet]
 
 \begin{code}
+
 class SignatureSubpacket s where
   data SignatureSubpacketState s :: *
   
