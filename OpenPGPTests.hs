@@ -33,7 +33,8 @@ tests = [
             ],
         testGroup "Packet Binary Tests" [
                 testProperty "PEKSKP binary test" prop_PEKSKPBinary,
-                testProperty "Signature v3 test" prop_Signature3Binary
+                testProperty "Signature v3 test" prop_Signature3Binary,
+                testProperty "Publice Key v4 test" prop_PublicKey4Binary
             ]
     ]
 
@@ -66,16 +67,21 @@ prop_KeyIDParser kid =
   in label "KeyID parser test" (kid == dkid)
      
 
-
-
+prop_LengthBinary :: Word32 -> Property
+prop_LengthBinary i =
+  let p = runPut $ put125Length i
+      g = parserToGet . bodyLenParser $ if (i <= 191) then OneOctedLength
+          else if (i <= 8383) then TwoOctedLength
+               else FiveOctedLength
+  in label "length binary test" $ i == (runGet g p)
+     
 prop_125LengthBinary :: Word32 -> Property
 prop_125LengthBinary i' = 
   let i = i'
       putI = runPut $ put125Length i
       get125Length = parserToGet parse125Length
       getI = runGet get125Length putI
-  in label "1,2,5 octet length binary test" $ 
-     (i == getI)
+  in label "1,2,5 octet length binary test" $ (i == getI)
 
 instance Arbitrary UTCTime where
   arbitrary = do
@@ -136,6 +142,10 @@ prop_PEKSKPBinary p =
 prop_Signature3Binary :: PacketState Signature3 -> Property
 prop_Signature3Binary p = 
     label "PacketState Signature3 binary test" $ p == rPutGet p
+
+prop_PublicKey4Binary :: PacketState Signature3 -> Property
+prop_PublicKey4Binary p = 
+    label "PacketState PublicKey4 binary test" $ p == rPutGet p
 
 instance Arbitrary (PacketState Signature3) where
   arbitrary = do

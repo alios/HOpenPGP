@@ -2060,7 +2060,6 @@ class SignatureSubpacket s where
 
 5.5.1.1. Public-Key Packet (Tag 6)
 
-
    A Public-Key packet starts a series of packets that forms an OpenPGP
    key (sometimes called an OpenPGP certificate).
 
@@ -2152,11 +2151,49 @@ class SignatureSubpacket s where
      - A series of multiprecision integers comprising the key material.
        This algorithm-specific portion is:
 
+\begin{code}
+data PublicKey4 = PublicKey4
+instance Packet PublicKey4 where 
+  data PacketTag PublicKey4 = PublicKeyPacket4Tag
+  data PacketState PublicKey4 = MkPublicKeyPacket4 {
+    pk4Time :: UTCTime,
+    pk4PKAlgorithm :: PublicKeyAlgorithm,
+    pk4PKMaterial :: PublicKeyMaterial
+    } deriving (Show)                                
+               
+  packetTag PublicKey4 = PublicKeyPacket4Tag
+  packetTag' _ = PublicKeyPacket4Tag
+  packetTagNum PublicKeyPacket4Tag = 0x06
+  
+  bodyParser PublicKey4 = do
+    _ <- A.word8 0x04
+    t <- parseTime
+    pkAlgo <- parsePublicKeyAlgorithm
+    pkMaterial <- parsePublicKeyMaterial pkAlgo
+    return $ MkPublicKeyPacket4 t pkAlgo pkMaterial
+  
+  putPacketBody pk4 = do
+    putWord8 0x04
+    put $ pk4Time pk4
+    put $ pk4PKAlgorithm pk4
+    putPKMaterial $ pk4PKMaterial pk4
+\end{code}
+
        Algorithm-Specific Fields for RSA public keys:
 
          - multiprecision integer (MPI) of RSA public modulus n;
 
          - MPI of RSA public encryption exponent e.
+
+\begin{code}
+parsePublicKeyMaterial :: PublicKeyAlgorithm -> Parser PublicKeyMaterial
+parsePublicKeyMaterial RSASignOnly = parsePublicKeyMaterial RSAEncryptOrSign
+parsePublicKeyMaterial RSAEncryptOnly = parsePublicKeyMaterial RSAEncryptOrSign
+parsePublicKeyMaterial RSAEncryptOrSign = do
+  n <- parseMPI
+  e <- parseMPI
+  return $ RSAPKMaterial n e
+\end{code}
 
        Algorithm-Specific Fields for DSA public keys:
 
@@ -2168,6 +2205,14 @@ class SignatureSubpacket s where
 
          - MPI of DSA public-key value y (= g**x mod p where x
            is secret).
+\begin{code}
+parsePublicKeyMaterial DSA = do
+  p <- parseMPI
+  q <- parseMPI
+  g <- parseMPI
+  y <- parseMPI
+  return $ DSAPKMaterial p q g y
+\end{code}
 
        Algorithm-Specific Fields for Elgamal public keys:
 
@@ -2177,6 +2222,37 @@ class SignatureSubpacket s where
 
          - MPI of Elgamal public key value y (= g**x mod p where x
            is secret).
+
+\begin{code}
+parsePublicKeyMaterial ElgamalEncryptOnly = do
+  p <- parseMPI
+  g <- parseMPI
+  y <- parseMPI
+  return $ ElgamalPKMaterial p g y
+
+data PublicKeyMaterial =
+  RSAPKMaterial {
+    rsapk_mod_n :: MPI,
+    rsapk_exponent_e :: MPI
+    } |
+  DSAPKMaterial {
+    daspk_prime_p :: MPI,
+    dsapk_group_order_q :: MPI,
+    dsapk_group_generator_g :: MPI,
+    dsapk_value_y :: MPI
+    } |
+  ElgamalPKMaterial {
+    elgamalpk_prime_p :: MPI,
+    elgamalpk_generator_g :: MPI,
+    elgamalpk_value_y :: MPI
+    } deriving (Show, Eq)
+
+putPKMaterial :: PublicKeyMaterial -> Put
+putPKMaterial (RSAPKMaterial n e) = do put n ; put e
+putPKMaterial (DSAPKMaterial p q g y) = do put p ; put q ; put g ; put y
+putPKMaterial (ElgamalPKMaterial p g y) = do put p ; put g ; put y
+\end{code}
+
 
 5.5.3. Secret-Key Packet Formats
 
