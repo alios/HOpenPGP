@@ -50,11 +50,14 @@ rGet bs = runGet get bs
 rPutGet :: Binary t => t -> t
 rPutGet = rGet . rPut
 
+putGetTest :: (Binary a, Eq a) => String -> a -> Property
+putGetTest l p = label l $ p == rPutGet p
+
 instance Arbitrary MPI where
   arbitrary = fmap (MPI . BS.pack) arbitrary
     
 prop_MPIBinary :: MPI -> Property
-prop_MPIBinary mpi = label "MPI binary test" (mpi == rPutGet mpi)
+prop_MPIBinary = putGetTest "MPI binary test"
   
 
 prop_KeyIDParser :: KeyID -> Property
@@ -89,8 +92,7 @@ instance Arbitrary UTCTime where
   return $ convert $ TOD (abs $ convert i) 0
 
 prop_UTCTimeBinary :: UTCTime -> Property
-prop_UTCTimeBinary t = 
-  label "UTCTime binary test" $ t == rPutGet t
+prop_UTCTimeBinary = putGetTest "UTCTime binary test"
 
 
 instance Arbitrary StringToKeySpecifier where
@@ -105,22 +107,19 @@ instance Arbitrary StringToKeySpecifier where
       2 -> IteratedAndSaltedS2K a s i
 
 prop_StringToKeySpecifierBinary :: StringToKeySpecifier -> Property
-prop_StringToKeySpecifierBinary s2k =  
-  label "StringToKeySpecifier binary test" $ s2k == rPutGet s2k
+prop_StringToKeySpecifierBinary = putGetTest "StringToKeySpecifier binary test"
   
 instance Arbitrary SignatureType where
   arbitrary = elements $ map fst signatureTypeCoding
 
 prop_SignatureTypeBinary :: SignatureType -> Property    
-prop_SignatureTypeBinary s = 
-  label "SignatureType binary test" $ s == rPutGet s
+prop_SignatureTypeBinary = putGetTest "SignatureType binary test"
   
 instance Arbitrary PublicKeyAlgorithm where
   arbitrary = elements $ map fst publicKeyAlgorithmCoding  
 
 prop_PublicKeyAlgorithmBinary :: PublicKeyAlgorithm -> Property
-prop_PublicKeyAlgorithmBinary a =
-  label "PublicKeyAlgorithm binary test" $ a == rPutGet a
+prop_PublicKeyAlgorithmBinary = putGetTest "PublicKeyAlgorithm binary test"
   
 instance Arbitrary (PacketState PEKSKP) where
   arbitrary = do
@@ -135,13 +134,11 @@ instance Arbitrary (PacketState PEKSKP) where
       2 -> MkPEKSKP keyid ElgamalEncryptOnly (Right (a,b))
     
 prop_PEKSKPBinary :: PacketState PEKSKP -> Property
-prop_PEKSKPBinary p = 
-    label "PacketState PEKSKP binary test" $ p == rPutGet p
+prop_PEKSKPBinary = putGetTest "PacketState PEKSKP binary test"
     
-
 prop_Signature3Binary :: PacketState Signature3 -> Property
-prop_Signature3Binary p = 
-    label "PacketState Signature3 binary test" $ p == rPutGet p
+prop_Signature3Binary = putGetTest "PacketState Signature3 binary test"
+
 instance Arbitrary (PacketState Signature3) where
   arbitrary = do
     ty <- arbitrary
@@ -156,11 +153,8 @@ instance Arbitrary (PacketState Signature3) where
       DSA -> fmap Right arbitrary
     return $ MkSignaturePacket3 ty t k a h f d
     
-    
-
 prop_PublicKey4Binary :: PacketState PublicKey4 -> Property
-prop_PublicKey4Binary p = 
-    label "PacketState PublicKey4 binary test" $ p == rPutGet p
+prop_PublicKey4Binary = putGetTest "PacketState PublicKey4 binary test"
 
 instance Arbitrary (PacketState PublicKey4) where
   arbitrary = do
