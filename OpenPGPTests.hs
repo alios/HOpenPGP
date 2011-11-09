@@ -142,11 +142,6 @@ prop_PEKSKPBinary p =
 prop_Signature3Binary :: PacketState Signature3 -> Property
 prop_Signature3Binary p = 
     label "PacketState Signature3 binary test" $ p == rPutGet p
-
-prop_PublicKey4Binary :: PacketState Signature3 -> Property
-prop_PublicKey4Binary p = 
-    label "PacketState PublicKey4 binary test" $ p == rPutGet p
-
 instance Arbitrary (PacketState Signature3) where
   arbitrary = do
     ty <- arbitrary
@@ -161,3 +156,24 @@ instance Arbitrary (PacketState Signature3) where
       DSA -> fmap Right arbitrary
     return $ MkSignaturePacket3 ty t k a h f d
     
+    
+
+prop_PublicKey4Binary :: PacketState PublicKey4 -> Property
+prop_PublicKey4Binary p = 
+    label "PacketState PublicKey4 binary test" $ p == rPutGet p
+
+instance Arbitrary (PacketState PublicKey4) where
+  arbitrary = do
+    t <- arbitrary
+    a <- arbitrary
+    m1 <- arbitrary
+    m2 <- arbitrary
+    m3 <- arbitrary
+    m4 <- arbitrary
+    return $ MkPublicKeyPacket4 t a $ case a of 
+      RSAEncryptOrSign -> RSAPKMaterial m1 m2
+      RSASignOnly -> RSAPKMaterial m1 m2
+      RSAEncryptOnly -> RSAPKMaterial m1 m2      
+      DSA -> DSAPKMaterial m1 m2 m3 m4
+      ElgamalEncryptOnly -> ElgamalPKMaterial m1 m2 m3
+

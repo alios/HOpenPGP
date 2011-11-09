@@ -2153,13 +2153,18 @@ class SignatureSubpacket s where
 
 \begin{code}
 data PublicKey4 = PublicKey4
+
+instance Binary (PacketState PublicKey4) where
+  put = putPacket
+  get = fmap fst (getPacket PublicKey4)
+
 instance Packet PublicKey4 where 
   data PacketTag PublicKey4 = PublicKeyPacket4Tag
   data PacketState PublicKey4 = MkPublicKeyPacket4 {
     pk4Time :: UTCTime,
     pk4PKAlgorithm :: PublicKeyAlgorithm,
     pk4PKMaterial :: PublicKeyMaterial
-    } deriving (Show)                                
+    } deriving (Show, Eq)                                
                
   packetTag PublicKey4 = PublicKeyPacket4Tag
   packetTag' _ = PublicKeyPacket4Tag
