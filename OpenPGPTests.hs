@@ -38,7 +38,10 @@ tests = [
                 testProperty "Publice Key v4 test" prop_PublicKey4Binary
             ]
     ]
-        
+
+--
+-- helpers 
+--
 rPut :: Binary t => t -> ByteString
 rPut = runPut . put
 
@@ -50,6 +53,10 @@ rPutGet = rGet . rPut
 
 putGetTest :: (Binary a, Eq a) => String -> a -> Property
 putGetTest l p = label l $ p == rPutGet p
+
+--
+-- properties / testables
+--
 
 prop_MPIBinary :: MPI -> Property
 prop_MPIBinary = putGetTest "MPI binary test"
@@ -99,6 +106,9 @@ prop_Signature3Binary = putGetTest "PacketState Signature3 binary test"
 prop_PublicKey4Binary :: PacketState PublicKey4 -> Property
 prop_PublicKey4Binary = putGetTest "PacketState PublicKey4 binary test"
 
+--
+-- Arbitrary instances
+--
 
 instance Arbitrary SignatureType where
   arbitrary = elements $ map fst signatureTypeCoding
